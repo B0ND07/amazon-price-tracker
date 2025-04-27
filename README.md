@@ -67,7 +67,7 @@ COUPON_ALERT=True
 ## ⚙️ How to Run
 
 ```bash
-python your_script_name.py
+python main.py
 ```
 
 - First price check will happen immediately

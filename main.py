@@ -13,6 +13,9 @@ from datetime import datetime
 import random
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
+from dotenv import load_dotenv
+import os
+
 
 @dataclass
 class Product:
@@ -23,7 +26,7 @@ class Product:
     coupon: Optional[str] = None
 
 class AmazonPriceTracker:
-    def __init__(self, email: str, password: str, smtp_address: str = "smtp.gmail.com"):
+    def __init__(self, email: str, password: str, smtp_address: str = "smtp.gmail.com", coupon_alert: bool = True):
         self.headers_list = [
             {
                 'Accept-Language': "en-IN,en;q=0.9",
@@ -52,6 +55,7 @@ class AmazonPriceTracker:
         self.smtp_address = smtp_address
         self.products: List[Product] = []
         self.session = self._create_session()
+        self.coupon_alert = coupon_alert
 
     def _create_session(self):
         """Create a session with retry strategy"""
@@ -139,8 +143,10 @@ class AmazonPriceTracker:
                 print(f"🎫 Coupon: {'Available - ' + product.coupon if product.coupon else 'None'}")
 
                 # Determine if alert should be sent
-                should_alert = product.current_price < product.target_price or product.coupon is not None
-                
+                should_alert = (
+    (product.current_price is not None and product.current_price < product.target_price) or
+    (self.coupon_alert and product.coupon is not None)
+)
                 # Print alert status
                 if should_alert:
                     print("🔔 Alert condition met!")
@@ -212,18 +218,29 @@ class AmazonPriceTracker:
         
         print("=" * 50)
         print(f"✅ Completed checking {len(self.products)} products")
+        print("⏱️ Sleeping for 10 minutes...")
 
 def main():
+    load_dotenv(dotenv_path="config.env")
+
+    email = os.getenv("SMTP_EMAIL")
+    password = os.getenv("SMTP_PASSWORD")
+    coupon_alert = os.getenv("COUPON_ALERT", "True").lower() in ("true", "1", "yes")
+
     # Initialize the tracker
     tracker = AmazonPriceTracker(
-        email="mhashimkp@gmail.com",
-        password="upofcmqzrvfxlooi"
+        email=email,
+        password=password,
+        coupon_alert=coupon_alert
     )
 
     # Add products to track
-    tracker.add_product("https://amzn.in/d/ilw23qE", 28000)
-    tracker.add_product("https://amzn.in/d/hSFfDhy", 28000)
-    tracker.add_product("https://amzn.in/d/4nQrGkk", 26000)
+    tracker.add_product(
+        url=os.getenv("PRODUCT_1_URL"),
+        target_price=float(os.getenv("PRODUCT_1_TARGET_PRICE"))
+    )
+    tracker.add_product(url=os.getenv("PRODUCT_2_URL"), target_price=float(os.getenv("PRODUCT_2_TARGET_PRICE")))
+    tracker.add_product(url=os.getenv("PRODUCT_3_URL"), target_price=float(os.getenv("PRODUCT_3_TARGET_PRICE")))
 
     # Schedule checks with random interval between 2-3 minutes
     schedule.every(10).to(15).minutes.do(tracker.check_all_products)

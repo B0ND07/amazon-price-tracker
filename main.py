@@ -1,22 +1,22 @@
-import requests
-from bs4 import BeautifulSoup
-import lxml
-import smtplib
-import schedule
-import time
-import json
-import asyncio
-from typing import List, Optional
-from datetime import datetime
-import random
-import re
-from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.retry import Retry
-from dotenv import load_dotenv
 import os
+import time
 import logging
-from pathlib import Path
+import schedule
+import asyncio
 import multiprocessing
+import random
+import json
+import requests
+from typing import Dict, Any, Optional, List
+from pathlib import Path
+from datetime import datetime
+
+# Third-party imports
+from dotenv import load_dotenv
+
+# Local imports
+from telegram_bot import Product, StoreType
+from tracker_manager import TrackerManager
 
 # Load environment variables from .env file
 load_dotenv(dotenv_path="config.env")
@@ -32,9 +32,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Telegram Bot Configuration
+# Configuration
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 ADMIN_CHAT_ID = os.getenv('ADMIN_USER_ID')
+SMTP_EMAIL = os.getenv('SMTP_EMAIL')
+SMTP_PASSWORD = os.getenv('SMTP_PASSWORD')
+COUPON_ALERT = os.getenv('COUPON_ALERT', 'False').lower() == 'true'
 
 def send_telegram_message(message: str) -> bool:
     """Send a message to the admin via Telegram bot.
@@ -49,6 +52,7 @@ def send_telegram_message(message: str) -> bool:
         logger.warning("Telegram bot token or admin chat ID not configured")
         return False
         
+    import requests
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         'chat_id': ADMIN_CHAT_ID,
@@ -68,16 +72,31 @@ def send_telegram_message(message: str) -> bool:
 PRODUCTS_FILE = 'products.json'
 
 class ProductManager:
+    """Manages product data storage and retrieval."""
     def __init__(self, filename: str = PRODUCTS_FILE):
+        """Initialize the product manager.
+        
+        Args:
+            filename: Path to the products JSON file
+        """
         self.filename = filename
         self.products = {}
         self._load_products()
     
     def _load_products(self):
+        """Load products from the JSON file."""
         if os.path.exists(self.filename):
             try:
                 with open(self.filename, 'r') as f:
-                    self.products = json.load(f)
+                    data = json.load(f)
+                    # Convert dict to Product objects
+                    for product_id, product_data in data.items():
+                        # Handle legacy products without store_type
+                        if 'store_type' not in product_data:
+                            product_data['store_type'] = StoreType.AMAZON
+                        else:
+                            product_data['store_type'] = StoreType(product_data['store_type'])
+                        self.products[product_id] = Product(**product_data)
             except Exception as e:
                 logger.error(f"Error loading products: {e}")
                 self.products = {}
@@ -92,303 +111,311 @@ class ProductManager:
             price = os.getenv(f'PRODUCT_{i}_TARGET_PRICE')
             if url and price:
                 try:
-                    self.add_product(url, float(price))
-                except ValueError:
-                    logger.warning(f"Invalid price for product {i}")
+                    # Detect store type from URL
+                    store_type = TrackerManager.detect_store_type(url)
+                    if not store_type:
+                        logger.warning(f"Could not determine store type for URL: {url}")
+                        store_type = StoreType.AMAZON  # Default to Amazon for backward compatibility
+                    
+                    self.add_product(url, float(price), store_type=store_type)
+                except ValueError as e:
+                    logger.warning(f"Invalid price for product {i}: {e}")
+                except Exception as e:
+                    logger.error(f"Error migrating product {i}: {e}")
     
     def _save_products(self):
+        """Save products to the JSON file."""
         with open(self.filename, 'w') as f:
-            json.dump(self.products, f, indent=2)
+            json.dump(
+                {pid: asdict(product) 
+                 for pid, product in self.products.items()}, 
+                f, 
+                indent=2
+            )
     
-    def add_product(self, url: str, target_price: float, **kwargs):
+    def add_product(self, url: str, target_price: float, **kwargs) -> Product:
+        """Add a new product to track.
+        
+        Args:
+            url: Product URL
+            target_price: Target price for alerts
+            **kwargs: Additional product attributes
+            
+        Returns:
+            Product: The created product
+            
+        Raises:
+            ValueError: If store type cannot be determined from URL
+        """
         import uuid
+        from telegram_bot import Product, StoreType
+        
+        # Get store type from kwargs or detect from URL
+        store_type = kwargs.pop('store_type', None)
+        if not store_type:
+            store_type = TrackerManager.detect_store_type(url)
+            if not store_type:
+                raise ValueError("Could not determine store type from URL")
+        
         product_id = str(uuid.uuid4())
-        self.products[product_id] = {
-            'url': url,
-            'target_price': target_price,
-            'title': kwargs.get('title'),
-            'current_price': kwargs.get('current_price'),
-            'coupon': kwargs.get('coupon'),
-            'id': product_id
-        }
+        product = Product(
+            id=product_id,
+            url=url,
+            target_price=target_price,
+            title=kwargs.get('title'),
+            current_price=kwargs.get('current_price'),
+            coupon=kwargs.get('coupon'),
+            tag=kwargs.get('tag'),
+            store_type=store_type
+        )
+        self.products[product_id] = product
         self._save_products()
-        return self.products[product_id]
+        return product
     
     def remove_product(self, product_id: str) -> bool:
+        """Remove a product from tracking.
+        
+        Args:
+            product_id: ID of the product to remove
+            
+        Returns:
+            bool: True if product was removed, False if not found
+        """
         if product_id in self.products:
             del self.products[product_id]
             self._save_products()
             return True
         return False
     
-    def get_all_products(self) -> list:
+    def get_all_products(self) -> List[Product]:
+        """Get all tracked products.
+        
+        Returns:
+            List[Product]: List of all tracked products
+        """
         return list(self.products.values())
     
-    def get_product(self, product_id: str) -> Optional[dict]:
+    def get_product(self, product_id: str) -> Optional[Product]:
+        """Get a product by ID.
+        
+        Args:
+            product_id: ID of the product to get
+            
+        Returns:
+            Optional[Product]: The product if found, None otherwise
+        """
         return self.products.get(product_id)
     
-    def update_product(self, product_id: str, **kwargs):
+    def update_product(self, product_id: str, **kwargs) -> bool:
+        """Update product attributes.
+        
+        Args:
+            product_id: ID of the product to update
+            **kwargs: Attributes to update
+            
+        Returns:
+            bool: True if update was successful, False otherwise
+        """
         if product_id in self.products:
-            logger.info(f"ProductManager: Updating product {product_id} with data: {kwargs}")
-            logger.info(f"Product data before update: {self.products[product_id]}")
-            self.products[product_id].update(kwargs)
-            logger.info(f"Product data after update: {self.products[product_id]}")
+            product = self.products[product_id]
+            logger.info(f"Updating product {product_id} with data: {kwargs}")
+            
+            # Update product attributes
+            for key, value in kwargs.items():
+                if value is not None:  # Don't update with None values
+                    setattr(product, key, value)
+            
             try:
                 self._save_products()
-                logger.info("Products saved successfully")
+                logger.info("Product updated successfully")
                 return True
             except Exception as e:
-                logger.error(f"Error saving products: {e}")
+                logger.error(f"Error saving product updates: {e}")
                 return False
+        
         logger.error(f"Product {product_id} not found")
         return False
 
-class AmazonPriceTracker:
+class PriceTracker:
+    """Main price tracker class that supports multiple store types."""
+    
     def __init__(self, email: str = None, password: str = None, 
                  smtp_address: str = "smtp.gmail.com", coupon_alert: bool = True):
-        self.headers_list = [
-            {
-                'Accept-Language': "en-IN,en;q=0.9",
-                'User-Agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive'
-            },
-            {
-                'Accept-Language': "en-US,en;q=0.9",
-                'User-Agent': "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15",
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive'
-            },
-            {
-                'Accept-Language': "en-GB,en;q=0.9",
-                'User-Agent': "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive'
-            }
-        ]
+        """Initialize the price tracker.
+        
+        Args:
+            email: Email for notifications (optional)
+            password: Password for email (optional)
+            smtp_address: SMTP server address (default: smtp.gmail.com)
+            coupon_alert: Whether to check for coupons (default: True)
+        """
         self.email = email
         self.password = password
         self.smtp_address = smtp_address
-        self.product_manager = ProductManager()
-        self.session = self._create_session()
         self.coupon_alert = coupon_alert
+        self.product_manager = ProductManager()
+        self.tracker_manager = TrackerManager(email, password)
+        
         # Load global email alerts setting
         self.global_email_alerts = os.getenv('GLOBAL_EMAIL_ALERTS', 'True').lower() in ('true', '1', 't')
-        logger.info(f"Initialized AmazonPriceTracker with global_email_alerts={self.global_email_alerts}")
-
-    def _create_session(self):
-        """Create a session with retry strategy"""
-        session = requests.Session()
-        retry_strategy = Retry(
-            total=3,  # number of retries
-            backoff_factor=1,  # wait 1, 2, 4 seconds between retries
-            status_forcelist=[500, 502, 503, 504, 429]  # status codes to retry on
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        session.mount("http://", adapter)
-        session.mount("https://", adapter)
-        return session
-
-    def _get_random_headers(self):
-        """Get random headers from the headers list"""
-        return random.choice(self.headers_list)
-
-    def add_product(self, url: str, target_price: float, **kwargs):
-        """Add a product to track."""
-        return self.product_manager.add_product(url, target_price, **kwargs)
+        logger.info(f"Initialized PriceTracker with global_email_alerts={self.global_email_alerts}")
+    
+    def add_product(self, url: str, target_price: float, **kwargs) -> Optional[Product]:
+        """Add a product to track.
+        
+        Args:
+            url: Product URL
+            target_price: Target price for alerts
+            **kwargs: Additional product attributes
+            
+        Returns:
+            Optional[Product]: The created product or None if failed
+        """
+        try:
+            return self.product_manager.add_product(url, target_price, **kwargs)
+        except Exception as e:
+            logger.error(f"Failed to add product: {e}")
+            return None
     
     def remove_product(self, product_id: str) -> bool:
-        """Remove a product from tracking."""
+        """Remove a product from tracking.
+        
+        Args:
+            product_id: ID of the product to remove
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
         return self.product_manager.remove_product(product_id)
     
-    def get_all_products(self) -> list:
-        """Get all tracked products."""
+    def get_all_products(self) -> List[Product]:
+        """Get all tracked products.
+        
+        Returns:
+            List[Product]: List of all tracked products
+        """
         return self.product_manager.get_all_products()
     
-    def get_product(self, product_id: str) -> Optional[dict]:
-        """Get a specific product by ID."""
+    def get_product(self, product_id: str) -> Optional[Product]:
+        """Get a specific product by ID.
+        
+        Args:
+            product_id: ID of the product to get
+            
+        Returns:
+            Optional[Product]: The product if found, None otherwise
+        """
         return self.product_manager.get_product(product_id)
     
     def update_product(self, product_id: str, **kwargs) -> bool:
-        """Update product details."""
-        logger.info(f"Updating product {product_id} with data: {kwargs}")
-        result = self.product_manager.update_product(product_id, **kwargs)
-        logger.info(f"Product {product_id} update result: {result}")
-        return result
-
-    def check_price_and_coupon(self, product_data: dict) -> dict:
-        """Check price and coupon for a single product. Returns updates if price dropped or coupon found."""
-        url = product_data.get('url')
-        if not url:
-            logger.error("Product URL not found")
-            return {}
-
-        # Initialize variables
-        updates = {}
-        message_parts = []
+        """Update product details.
         
+        Args:
+            product_id: ID of the product to update
+            **kwargs: Attributes to update
+            
+        Returns:
+            bool: True if update was successful, False otherwise
+        """
+        return self.product_manager.update_product(product_id, **kwargs)
+    
+    def check_price_and_coupon(self, product: Product) -> Dict:
+        """Check price and coupon for a single product.
+        
+        Args:
+            product: Product to check
+            
+        Returns:
+            Dict containing updates if price dropped or coupon found
+        """
         try:
-            # Get random headers
-            headers = self._get_random_headers()
+            result = self.tracker_manager.check_price_drop(product)
             
-            # Add a small delay to avoid being blocked
-            time.sleep(random.uniform(1, 3))
-            
-            # Make the request
-            response = self.session.get(url, headers=headers, timeout=10)
-            
-            if response.status_code != 200:
-                # Only log 404 errors to console, don't send Telegram notification
-                if response.status_code != 404:
-                    logger.warning(f"Failed to retrieve page. Status code: {response.status_code}")
-                    send_telegram_message(f"❌ Failed to retrieve page (Status: {response.status_code})\n\n🔗 {url}")
+            if not result:
+                logger.error(f"No result returned for product {product.id}")
                 return {}
-
-            soup = BeautifulSoup(response.content, 'lxml')
             
-            # Get product title with multiple fallback options
-            title = 'Unknown Product'
-            title_selectors = [
-                ('span', {'id': 'productTitle'}),
-                ('span', {'id': 'title'}),
-                ('h1', {}),  # Generic h1 as last resort
-                ('title', {})  # Fallback to page title
-            ]
+            # Prepare updates
+            updates = {
+                'current_price': result.get('current_price'),
+                'title': result.get('title', product.title)
+            }
             
-            for tag, attrs in title_selectors:
-                element = soup.find(tag, **attrs)
-                if element:
-                    title = element.get_text().strip()
-                    if title and title != 'Amazon.in':  # Skip default/empty titles
-                        break
+            if result.get('price_dropped', False):
+                self._send_price_drop_notification(product, result)
             
-            logger.info(f"Extracted title: {title}")
+            if result.get('coupon') and result.get('coupon') != getattr(product, 'coupon', None):
+                if not result.get('price_dropped'):  # Don't send duplicate notifications
+                    self._send_coupon_notification(product, result)
             
-            # Update title if we found a valid one and it's different from current
-            current_title = product_data.get('title')
-            if title and title != 'Unknown Product' and title != 'Amazon.in' and title != current_title:
-                updates['title'] = title
-                logger.info(f"Title update queued: '{current_title}' -> '{title}'")
-                logger.info(f"Updates dict before update: {updates}")
-            
-            # Get price
-            price_element = (
-                soup.find('span', class_='a-offscreen') or
-                soup.find('span', class_='a-price-whole')
-            )
-            
-            if not price_element:
-                logger.warning("Price element not found, trying alternate selectors...")
-                # Try alternate selectors
-                price_element = soup.find('span', class_=lambda x: x and 'price' in x.lower())
-                if price_element:
-                    try:
-                        price_text = price_element.get_text().strip()
-                        if not price_text:
-                            logger.warning("Empty price text in alternate selector")
-                            return {}
-                            
-                        digits = ''.join(filter(str.isdigit, price_text))
-                        if not digits:
-                            logger.warning(f"No digits found in alternate price text: {price_text}")
-                            return {}
-                            
-                        if '.' in price_text[-3:]:
-                            price = float(digits)/100
-                        else:
-                            price = float(digits)
-                            
-                        updates['current_price'] = price
-                        message_parts.append(f"ℹ️ Price found via alternate selector: ₹{price:,.2f}")
-                        logger.info(f"Price found via alternate selector: {title} is now ₹{price:,.2f}")
-                        
-                    except (ValueError, IndexError) as e:
-                        logger.error(f"Error parsing alternate price: {e}")
-                        return {}
-                else:
-                    logger.warning("Price not found in alternate selectors either")
-                    return {}
-            
-            price_text = price_element.get_text().strip()
-            price = float(re.sub(r'[^\d.]', '', price_text))
-            
-            updates = {}
-            message_parts = []
-            
-            # Check if price dropped below target
-            target_price = product_data.get('target_price')
-            if target_price and price <= target_price:
-                updates['current_price'] = price
-                alert_msg = (
-                    f"🎉 <b>Price Drop Alert!</b> 🎉\n\n"
-                    f"📦 <b>{title}</b>\n"
-                    f"💰 <b>New Price:</b> ₹{price:,.2f}\n"
-                    f"🎯 <b>Your Target:</b> ₹{target_price:,.2f}\n"
-                    f"💵 <b>You Save:</b> ₹{target_price - price:,.2f} ({(1 - (price / target_price)) * 100:.1f}%)\n\n"
-                    f"🔗 <a href='{url}'>Buy Now</a>"
-                )
-                message_parts.append(alert_msg)
-                logger.info(f"Price alert! {title} is now ₹{price:,.2f} (Target: ₹{target_price:,.2f})")
-            
-            # Check for coupons if enabled
-            if self.coupon_alert:
-                coupon_element = (
-                    soup.find('span', class_=lambda x: x and 'coupon' in x.lower()) or
-                    soup.find('span', class_=lambda x: x and 'deal' in x.lower())
-                )
-                coupon = coupon_element.get_text().strip() if coupon_element else None
-                if coupon:
-                    updates['coupon'] = coupon
-                    coupon_msg = f"🎫 <b>Coupon Available!</b>\n\n{coupon}\n\n🔗 <a href='{url}'>Apply Coupon</a>"
-                    message_parts.append(coupon_msg)
-                    logger.info(f"Coupon Available: {coupon}")
-
-            # Always update the product with any changes (price, title, etc.)
-            if updates:
-                logger.info(f"Saving updates for product {product_data.get('id')}: {updates}")
-                try:
-                    # Get current product data
-                    current_product = self.get_product(product_data['id'])
-                    if current_product:
-                        # Only send email alerts if they are enabled globally
-                        if message_parts and ('current_price' in updates or 'coupon' in updates):
-                            message = "\n\n---\n\n".join(message_parts)
-                            send_telegram_message(message)
-                            
-                        # Merge updates with current data
-                        updated_data = {**current_product, **updates}
-                        # Save the merged data
-                        updated = self.update_product(product_data['id'], **updated_data)
-                        if updated:
-                            logger.info(f"Successfully updated product {product_data.get('id')}")
-                            # Verify the update was saved
-                            updated_product = self.get_product(product_data['id'])
-                            if updated_product and all(updated_product.get(k) == v for k, v in updates.items() if k in updated_product):
-                                logger.info("Update verified in database")
-                            else:
-                                logger.error(f"Update verification failed! Expected: {updates}, Got: {updated_product}")
-                        else:
-                            logger.error("Failed to update product")
-                    else:
-                        logger.error(f"Could not find product {product_data['id']} to update")
-                except Exception as e:
-                    logger.error(f"Error updating product: {e}", exc_info=True)
-
             return updates
-
+            
         except requests.RequestException as e:
             # Only log request errors, don't send Telegram notification
             error_msg = f"Request error: {e}"
             logger.error(error_msg)
             return {}
+            
         except Exception as e:
             # Only log unexpected errors, don't send Telegram notification
             error_msg = f"Unexpected error: {e}"
-            logger.error(error_msg)
+            logger.error(error_msg, exc_info=True)
             return {}
+
+    def _send_price_drop_notification(self, product: Product, result: Dict) -> None:
+        """Send a notification when a product's price drops below the target price.
+        
+        Args:
+            product: The product with price drop
+            result: Dictionary containing price drop details
+        """
+        try:
+            current_price = result.get('current_price', 0) or 0
+            previous_price = result.get('previous_price', 0) or 0
+            title = result.get('title', getattr(product, 'title', 'Unknown Product'))
+            
+            # Calculate price difference and percentage
+            if previous_price and previous_price > 0:
+                price_diff = previous_price - current_price
+                percent_off = (price_diff / previous_price) * 100 if previous_price > 0 else 0
+                price_info = (
+                    f"Price dropped from ₹{previous_price:,.2f} to ₹{current_price:,.2f} "
+                    f"(Save: ₹{price_diff:,.2f}, {percent_off:.1f}% off)"
+                )
+            else:
+                price_info = f"Price: ₹{current_price:,.2f}"
+            
+            # Prepare message
+            message = (
+                f"🎉 <b>Price Drop Alert!</b> 🎉\n\n"
+                f"📦 <b>{title}</b>\n"
+                f"🎯 <b>Target Price:</b> ₹{product.target_price:,.2f}\n"
+                f"💰 <b>New Price:</b> ₹{current_price:,.2f}\n"
+                f"🔗 <a href='{product.url}'>View Product</a>"
+            )
+
+            # Send email alert if enabled
+            if self.global_email_alerts and self.email and self.password:
+                self.send_email_alert(
+                    {
+                        'title': title,
+                        'url': product.url,
+                        'target_price': product.target_price
+                    },
+                    {
+                        'current_price': current_price,
+                        'previous_price': previous_price,
+                        'coupon': result.get('coupon')
+                    }
+                )
+            
+            # Send Telegram notification
+            asyncio.run(send_telegram_message(message))
+            
+            logger.info(f"Sent price drop notification for {title}")
+            
+        except Exception as e:
+            logger.error(f"Error sending price drop notification: {e}", exc_info=True)
 
     def send_email_alert(self, product_data: dict, updates: dict) -> None:
         """Send an email alert for a product if email alerts are enabled."""
@@ -407,7 +434,7 @@ class AmazonPriceTracker:
         current_price = updates.get('current_price', 0)
         coupon = updates.get('coupon')
 
-        subject = f"🚨 Price Alert: {product_title}"
+        subject = f"🚨 Price Alert 🚨"
         
         # Create email body with HTML formatting
         body = f"""
@@ -477,17 +504,32 @@ class AmazonPriceTracker:
                         continue
 
             # Process each product
-            for idx, product in enumerate(product_list, 1):
+            for idx, product_data in enumerate(product_list, 1):
                 try:
-                    if not product or not isinstance(product, dict):
-                        logger.error(f"Invalid product data at index {idx}")
+                    if not product_data:
+                        logger.error(f"Empty product data at index {idx}")
                         continue
                         
-                    logger.info(f"Checking product {idx}: {product.get('url')}")
+                    # Convert to Product object if it's a dict
+                    from telegram_bot import Product  # Import from telegram_bot where Product is defined
+                    if isinstance(product_data, dict):
+                        try:
+                            product = Product(**product_data)
+                        except Exception as e:
+                            logger.error(f"Failed to create Product from dict at index {idx}: {e}")
+                            continue
+                    else:
+                        product = product_data
+                        
+                    if not hasattr(product, 'url'):
+                        logger.error(f"Product at index {idx} has no URL")
+                        continue
+                        
+                    logger.info(f"Checking product {idx}: {product.url}")
                     updates = self.check_price_and_coupon(product)
                     
                     if updates:
-                        self.send_email_alert(product, updates)
+                        self.send_email_alert(vars(product) if hasattr(product, '__dict__') else product, updates)
                     
                     # Random delay between 3-7 seconds to avoid being blocked
                     time.sleep(random.uniform(3, 7))
@@ -506,7 +548,7 @@ class AmazonPriceTracker:
 def run_tracker():
     """Run the price tracker in a separate process."""
     # Initialize tracker
-    tracker = AmazonPriceTracker(
+    tracker = PriceTracker(
         email=os.getenv('SMTP_EMAIL'),
         password=os.getenv('SMTP_PASSWORD'),
         coupon_alert=os.getenv('COUPON_ALERT', 'False').lower() == 'true'

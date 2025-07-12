@@ -1,6 +1,7 @@
 import json
 import os
 import logging
+import time
 from pathlib import Path
 from typing import Dict, List, Optional
 from dataclasses import asdict, dataclass
@@ -25,6 +26,12 @@ logger = logging.getLogger(__name__)
 PRODUCTS_FILE = 'products.json'
 ADMIN_USER_ID = int(os.getenv('ADMIN_USER_ID', 0))
 
+from enum import Enum, auto
+
+class StoreType(Enum):
+    AMAZON = 'amazon'
+    FLIPKART = 'flipkart'
+
 @dataclass
 class Product:
     url: str
@@ -34,6 +41,7 @@ class Product:
     coupon: Optional[str] = None
     id: Optional[str] = None
     tag: Optional[str] = None
+    store_type: StoreType = StoreType.AMAZON  # Default to Amazon for backward compatibility
 
 class ProductManager:
     def __init__(self, filename: str = PRODUCTS_FILE):
@@ -41,39 +49,85 @@ class ProductManager:
         self.products: Dict[str, Product] = {}
         self._load_products()
     
+    def _product_to_dict(self, product: Product) -> dict:
+        """Convert a Product to a dictionary, handling enums properly."""
+        data = asdict(product)
+        # Convert StoreType enum to its value for JSON serialization
+        if 'store_type' in data and data['store_type'] is not None:
+            data['store_type'] = data['store_type'].value
+        return data
+    
+    def _dict_to_product(self, data: dict) -> Product:
+        """Convert a dictionary to a Product, handling enums properly."""
+        # Convert store_type string back to StoreType enum
+        if 'store_type' in data and isinstance(data['store_type'], str):
+            data['store_type'] = StoreType(data['store_type'])
+        return Product(**data)
+    
     def _load_products(self):
         if os.path.exists(self.filename):
             try:
                 with open(self.filename, 'r') as f:
                     data = json.load(f)
                     self.products = {
-                        pid: Product(**product) 
-                        for pid, product in data.items()
+                        pid: self._dict_to_product(product_data)
+                        for pid, product_data in data.items()
                     }
+            except json.JSONDecodeError as e:
+                logger.error(f"Error decoding products JSON: {e}")
+                # Try to recover by creating a backup of the corrupted file
+                try:
+                    import shutil
+                    backup_file = f"{self.filename}.bak.{int(time.time())}"
+                    shutil.copy2(self.filename, backup_file)
+                    logger.info(f"Created backup of corrupted file at {backup_file}")
+                except Exception as backup_error:
+                    logger.error(f"Failed to create backup: {backup_error}")
+                self.products = {}
             except Exception as e:
                 logger.error(f"Error loading products: {e}")
                 self.products = {}
     
     def _save_products(self):
         try:
-            with open(self.filename, 'w') as f:
-                json.dump(
-                    {pid: asdict(product) 
-                     for pid, product in self.products.items()}, 
-                    f, 
-                    indent=2
-                )
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(os.path.abspath(self.filename)), exist_ok=True)
+            
+            # Prepare data for JSON serialization
+            data_to_save = {
+                pid: self._product_to_dict(product)
+                for pid, product in self.products.items()
+            }
+            
+            # Write to a temporary file first
+            temp_file = f"{self.filename}.tmp"
+            with open(temp_file, 'w') as f:
+                json.dump(data_to_save, f, indent=2)
+            
+            # Atomic rename to ensure data integrity
+            if os.path.exists(self.filename):
+                os.replace(temp_file, self.filename)
+            else:
+                os.rename(temp_file, self.filename)
+                
         except Exception as e:
             logger.error(f"Error saving products: {e}")
+            # If there was an error, clean up the temp file if it exists
+            if os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except Exception as cleanup_error:
+                    logger.error(f"Failed to clean up temp file: {cleanup_error}")
     
-    def add_product(self, url: str, target_price: float, tag: Optional[str] = None) -> Product:
+    def add_product(self, url: str, target_price: float, tag: Optional[str] = None, store_type: StoreType = StoreType.AMAZON) -> Product:
         import uuid
         product_id = str(uuid.uuid4())
         product = Product(
             id=product_id,
             url=url,
             target_price=target_price,
-            tag=tag
+            tag=tag,
+            store_type=store_type
         )
         self.products[product_id] = product
         self._save_products()
@@ -212,20 +266,24 @@ async def add_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not url.startswith(('http://', 'https://')):
             url = 'https://' + url
         
-        # Check if it's a valid Amazon URL (supports various TLDs and short links)
+        # Check if it's a valid Amazon or Flipkart URL
         import re
         amazon_pattern = r'(https?:\/\/)(www\.)?(amazon\.(com|in|co\.uk|de|fr|es|it|nl|pl|ae|sa|com\.br|com\.mx|com\.au|co\.jp|cn)|a\.co|amzn\.to|amzn\.in)'
+        flipkart_pattern = r'(https?:\/\/)(www\.)?(flipkart\.com|dl\.flipkart\.com)'
         
-        if not re.match(amazon_pattern, url, re.IGNORECASE):
+        if not (re.match(amazon_pattern, url, re.IGNORECASE) or re.match(flipkart_pattern, url, re.IGNORECASE)):
             await update.message.reply_text(
-                "❌ Please provide a valid Amazon product URL.\n"
-                "Example: `/add https://amzn.in/d/example 5000 SSD`\n"
-                "Or: `/add https://www.amazon.in/dp/B0XXXXXX 10000 Laptop`",
+                "❌ Please provide a valid Amazon or Flipkart product URL.\n"
+                "Example Amazon: `/add https://amzn.in/d/example 5000 SSD`\n"
+                "Example Flipkart: `/add https://www.flipkart.com/example 15000 Phone`",
                 parse_mode='Markdown'
             )
             return
+            
+        # Set store type based on URL
+        store_type = StoreType.FLIPKART if 'flipkart.com' in url.lower() else StoreType.AMAZON
 
-        product = product_manager.add_product(url, target_price, tag)
+        product = product_manager.add_product(url, target_price, tag, store_type=store_type)
         await update.message.reply_text(
             f"✅ *Product added!*\n\n"
             f"🔗 *URL:* {url}\n"

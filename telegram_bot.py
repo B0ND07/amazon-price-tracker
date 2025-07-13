@@ -443,7 +443,7 @@ def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     logger.warning('Update "%s" caused error "%s"', update, context.error)
 
 def main() -> None:
-    """Start the bot."""
+    """Start the bot with enhanced connection settings and error handling."""
     # Load environment variables
     load_dotenv(dotenv_path="config.env")
     
@@ -454,30 +454,67 @@ def main() -> None:
     )
     logger = logging.getLogger(__name__)
 
-    try:
-        # Create the Application
-        application = Application.builder().token(os.getenv('TELEGRAM_BOT_TOKEN')).build()
+    # Get bot token
+    bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+    if not bot_token:
+        logger.error("No TELEGRAM_BOT_TOKEN found in environment variables")
+        return
 
-        # Add command handlers
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(CommandHandler("add", add_product))
-        application.add_handler(CommandHandler("remove", remove_product))
-        application.add_handler(CommandHandler("list", list_products))
-        application.add_handler(CommandHandler("alertson", global_alerts_on))
-        application.add_handler(CommandHandler("alertsoff", global_alerts_off))
-        application.add_handler(CommandHandler("status", status))
-        
-        # Log all errors
-        application.add_error_handler(error_handler)
+    max_retries = 3
+    retry_delay = 5  # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"Attempt {attempt + 1}/{max_retries} to start the bot...")
+            
+            # Create the Application with connection pool settings
+            application = (
+                Application.builder()
+                .token(bot_token)
+                .connect_timeout(30.0)  # 30 seconds connection timeout
+                .pool_timeout(30.0)     # 30 seconds pool timeout
+                .read_timeout(30.0)     # 30 seconds read timeout
+                .write_timeout(30.0)    # 30 seconds write timeout
+                .get_updates_connect_timeout(30.0)  # 30 seconds for getUpdates connection
+                .get_updates_pool_timeout(30.0)     # 30 seconds for getUpdates pool
+                .get_updates_read_timeout(30.0)     # 30 seconds for getUpdates read
+                .build()
+            )
 
-        # Start the bot
-        logger.info("Starting bot...")
-        application.run_polling()
-        
-    except Exception as e:
-        logger.error(f"Failed to start bot: {e}")
-        raise
+            # Add command handlers
+            application.add_handler(CommandHandler("start", start))
+            application.add_handler(CommandHandler("help", help_command))
+            application.add_handler(CommandHandler("add", add_product))
+            application.add_handler(CommandHandler("remove", remove_product))
+            application.add_handler(CommandHandler("list", list_products))
+            application.add_handler(CommandHandler("alertson", global_alerts_on))
+            application.add_handler(CommandHandler("alertsoff", global_alerts_off))
+            application.add_handler(CommandHandler("status", status))
+            
+            # Log all errors
+            application.add_error_handler(error_handler)
+
+            # Start the bot with polling
+            logger.info("Starting bot with polling...")
+            application.run_polling(
+                drop_pending_updates=True,
+                allowed_updates=Update.ALL_TYPES,
+                close_loop=False
+            )
+            break  # If we get here, the bot has stopped gracefully
+            
+        except Exception as e:
+            logger.error(f"Attempt {attempt + 1} failed: {e}")
+            if attempt == max_retries - 1:  # Last attempt
+                logger.error("Max retries reached. Could not start the bot.")
+                raise
+                
+            # Wait before retrying
+            logger.info(f"Retrying in {retry_delay} seconds...")
+            time.sleep(retry_delay)
+            
+            # Increase delay for next retry (exponential backoff)
+            retry_delay *= 2
 
 if __name__ == '__main__':
     main()

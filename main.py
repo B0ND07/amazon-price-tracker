@@ -10,6 +10,7 @@ import requests
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 from datetime import datetime
+from dataclasses import asdict
 
 # Third-party imports
 from dotenv import load_dotenv
@@ -25,10 +26,7 @@ load_dotenv(dotenv_path="config.env")
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('price_tracker.log')
-    ]
+    handlers=[logging.StreamHandler()]
 )
 logger = logging.getLogger(__name__)
 
@@ -125,13 +123,49 @@ class ProductManager:
     
     def _save_products(self):
         """Save products to the JSON file."""
-        with open(self.filename, 'w') as f:
-            json.dump(
-                {pid: asdict(product) 
-                 for pid, product in self.products.items()}, 
-                f, 
-                indent=2
-            )
+        def product_serializer(obj):
+            if hasattr(obj, 'to_dict'):
+                return obj.to_dict()
+            elif hasattr(obj, '__dict__'):
+                result = {}
+                for key, value in obj.__dict__.items():
+                    if key.startswith('_'):
+                        continue
+                    if hasattr(value, 'value'):  # Handle enums
+                        result[key] = value.value
+                    else:
+                        result[key] = value
+                return result
+            return str(obj)
+            
+        try:
+            # Create a copy of the products dictionary with serializable values
+            serializable_products = {}
+            for pid, product in self.products.items():
+                if hasattr(product, 'to_dict'):
+                    serializable_products[pid] = product.to_dict()
+                else:
+                    serializable_products[pid] = product_serializer(product)
+            
+            # Write to a temporary file first
+            temp_file = f"{self.filename}.tmp"
+            with open(temp_file, 'w') as f:
+                json.dump(serializable_products, f, indent=2, default=product_serializer)
+            
+            # Atomic replace
+            if os.path.exists(self.filename):
+                os.replace(temp_file, self.filename)
+            else:
+                os.rename(temp_file, self.filename)
+                
+        except Exception as e:
+            logger.error(f"Error saving products: {e}")
+            # Clean up temp file if it exists
+            if os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except:
+                    pass
     
     def add_product(self, url: str, target_price: float, **kwargs) -> Product:
         """Add a new product to track.
@@ -410,7 +444,7 @@ class PriceTracker:
                 )
             
             # Send Telegram notification
-            asyncio.run(send_telegram_message(message))
+            send_telegram_message(message)
             
             logger.info(f"Sent price drop notification for {title}")
             
@@ -529,6 +563,12 @@ class PriceTracker:
                     updates = self.check_price_and_coupon(product)
                     
                     if updates:
+                        # Save the updates (like title, current_price) back to the product
+                        if hasattr(product, 'id') and product.id:
+                            self.update_product(
+                                product.id,
+                                **{k: v for k, v in updates.items() if v is not None}
+                            )
                         self.send_email_alert(vars(product) if hasattr(product, '__dict__') else product, updates)
                     
                     # Random delay between 3-7 seconds to avoid being blocked

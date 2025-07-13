@@ -209,50 +209,63 @@ class FlipkartPriceTracker(PriceTracker):
         # For short URLs, we'll get the final URL after redirects
         parsed_url = urlparse(url)
         if parsed_url.netloc == 'dl.flipkart.com' and parsed_url.path.startswith('/s/'):
-            try:
-                # Make a HEAD request to get the final URL with a shorter timeout
-                response = requests.head(
-                    url,
-                    headers=self._get_random_headers(),
-                    allow_redirects=True,
-                    timeout=5  # Shorter timeout for URL resolution
-                )
-                clean_url = response.url
-                logger.debug(f"Resolved short URL {url} to {clean_url}")
-                
-                # If we got redirected to the home page, the short URL might be invalid
-                if 'flipkart.com' in clean_url and not any(x in clean_url for x in ['/p/', '/product/']):
-                    logger.warning(f"Short URL {url} redirected to home page, might be invalid")
-                    raise ValueError("Invalid product URL - redirected to home page")
+            max_short_url_attempts = 1  # Only try once for short URL resolution
+            for attempt in range(max_short_url_attempts):
+                try:
+                    # Make a HEAD request to get the final URL with a shorter timeout
+                    response = requests.head(
+                        url,
+                        headers=self._get_random_headers(),
+                        allow_redirects=True,
+                        timeout=10  # Increased from 5 to 10 seconds
+                    )
+                    clean_url = response.url
+                    logger.debug(f"Resolved short URL {url} to {clean_url}")
                     
-            except requests.Timeout:
-                logger.warning(f"Timeout while resolving short URL {url}, will try with full request")
-                clean_url = url  # Fall back to original URL
-            except Exception as e:
-                logger.warning(f"Failed to resolve short URL {url}: {e}")
-                clean_url = url  # Fall back to original URL
+                    # If we got redirected to the home page, the short URL might be invalid
+                    if 'flipkart.com' in clean_url and not any(x in clean_url for x in ['/p/', '/product/']):
+                        logger.warning(f"Short URL {url} redirected to home page, might be invalid")
+                        raise ValueError("Invalid product URL - redirected to home page")
+                    break
+                        
+                except (requests.Timeout, requests.RequestException) as e:
+                    if attempt == max_short_url_attempts - 1:  # Last attempt
+                        logger.warning(f"Failed to resolve short URL {url} after {attempt + 1} attempts: {e}")
+                        clean_url = url  # Fall back to original URL
+                    continue
+                except Exception as e:
+                    logger.warning(f"Unexpected error resolving short URL {url}: {e}")
+                    clean_url = url  # Fall back to original URL
+                    break
         else:
             # Normalize URL (remove tracking parameters, fragments, etc.)
             clean_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}"
         
+        # Adjust timeouts based on attempt number
         for attempt in range(self.max_retries + 1):
             try:
-                # Add a random delay between requests
+                # Add a random delay between requests, increasing with each attempt
                 self._random_delay()
                 
                 # Update headers with a new user agent
                 self._update_headers()
                 
-                logger.debug(f"Attempt {attempt + 1}/{self.max_retries + 1} - Fetching URL: {clean_url}")
+                # Increase timeout with each retry (15s, 20s, 25s)
+                timeout = 15 + (5 * min(attempt, 2))  # Cap at 25s max
                 
-                # Make the request
+                logger.debug(f"Attempt {attempt + 1}/{self.max_retries + 1} - Fetching URL: {clean_url} (timeout: {timeout}s)")
+                
+                # Make the request with the adjusted timeout
                 response = self.session.get(
                     clean_url,
-                    timeout=15,
+                    timeout=timeout,
                     allow_redirects=True,
                     headers={
                         'Referer': 'https://www.flipkart.com/',
                         'DNT': '1',
+                        'Accept-Encoding': 'gzip, deflate, br',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                        'Connection': 'keep-alive'
                     }
                 )
                 
@@ -280,10 +293,19 @@ class FlipkartPriceTracker(PriceTracker):
                 
                 break
                 
+            except requests.exceptions.Timeout as e:
+                if attempt == self.max_retries:
+                    logger.error(f"Timeout after {self.max_retries + 1} attempts: {e}")
+                    raise Exception(f"Request timed out after {self.max_retries + 1} attempts") from e
+                
+                wait_time = (2 ** attempt) + random.random()  # Exponential backoff with jitter
+                logger.warning(f"Attempt {attempt + 1} timed out. Retrying in {wait_time:.1f} seconds...")
+                time.sleep(wait_time)
+                
             except requests.exceptions.RequestException as e:
                 if attempt == self.max_retries:
-                    logger.error(f"Failed to fetch product info after {self.max_retries} attempts: {e}")
-                    raise
+                    logger.error(f"Failed to fetch product info after {self.max_retries + 1} attempts: {e}")
+                    raise Exception(f"Request failed after {self.max_retries + 1} attempts: {e}") from e
                 
                 wait_time = (2 ** attempt) + random.random()  # Exponential backoff with jitter
                 logger.warning(f"Attempt {attempt + 1} failed: {e}. Retrying in {wait_time:.1f} seconds...")

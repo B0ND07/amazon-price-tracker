@@ -9,14 +9,24 @@
     "tag": "flip",
     "store_type": "flipkart"
   },
-  "cdaf2591-23eb-40b6-8aa6-c46e769c7cdb": {
-    "url": "https://amzn.in/d/0Lv2dpI",
-    "target_price": 80000.0,
-    "title": "Samsung Galaxy S24 Ultra 5G AI Smartphone with Galaxy AI (Titanium Black, 12GB, 256GB Storage), Snapdragon 8 Gen 3, 200 MP Camera with ProVisual Engine and 5000mAh Battery",
-    "current_price": 74999.0,
+  "9d238c53-1e6d-43f5-88e7-0508da3a2f97": {
+    "url": "https://amzn.in/d/c6TdQDE",
+    "target_price": 12600.0,
+    "title": "WD_Black Western Digital SN7100 NVMe 2TB, Upto 7250MB/s R, 6900MB/s W, 5Y Warranty, PCIe Gen 4 NVMe M.2 (2280), Gaming Storage, Internal Solid State Drive (SSD) (WDS200T4X0E-00CJA0)",
+    "current_price": 11999.0,
     "coupon": null,
-    "id": "cdaf2591-23eb-40b6-8aa6-c46e769c7cdb",
-    "tag": "iphone",
+    "id": "9d238c53-1e6d-43f5-88e7-0508da3a2f97",
+    "tag": null,
+    "store_type": "amazon"
+  },
+  "44ccb8f6-343a-46a8-b923-567c8c39ce34": {
+    "url": "https://amzn.in/d/iXj9L9L",
+    "target_price": 700.0,
+    "title": "Anker Type C to Type C 100W Flow Cable, 3ft Black, Powerline III Flow Cable, Super Fast Charging Cable (50% Charge in 30 mins), 25X More Durable, Data Sync Compatibility & Power Delivery (PD)",
+    "current_price": 779.0,
+    "coupon": null,
+    "id": "44ccb8f6-343a-46a8-b923-567c8c39ce34",
+    "tag": "typec",
     "store_type": "amazon"
   }
 }

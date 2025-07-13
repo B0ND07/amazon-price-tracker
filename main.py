@@ -608,29 +608,82 @@ def run_tracker():
 def run_telegram_bot():
     """Run the Telegram bot in a separate process."""
     from telegram_bot import main as telegram_main
-    asyncio.run(telegram_main())
-
+    try:
+        asyncio.run(telegram_main())
+    except (SystemExit, KeyboardInterrupt):
+        logger.info("Telegram bot process terminated")
+    except Exception as e:
+        logger.error(f"Error in Telegram bot process: {e}")
+        raise
 def main():
     """Main function to run both the Telegram bot and price tracker in separate processes."""
-    # Create processes
-    tracker_process = multiprocessing.Process(target=run_tracker)
-    bot_process = multiprocessing.Process(target=run_telegram_bot)
+    while True:  # Main restart loop
+        # Remove any existing restart file
+        if os.path.exists('.restart'):
+            try:
+                os.remove('.restart')
+            except Exception as e:
+                logger.warning(f"Failed to remove restart file: {e}")
+        
+        # Create processes
+        tracker_process = multiprocessing.Process(target=run_tracker, name="tracker")
+        bot_process = multiprocessing.Process(target=run_telegram_bot, name="telegram_bot")
+        
+        logger.info("Starting processes...")
+        tracker_process.start()
+        bot_process.start()
+        
+        try:
+            # Monitor processes and check for restart signal
+            while True:
+                time.sleep(5)  # Check every 5 seconds
+                
+                # Check if either process has died
+                if not tracker_process.is_alive() or not bot_process.is_alive():
+                    logger.error("One of the processes has died")
+                    break
+                    
+                # Check for restart signal
+                if os.path.exists('.restart'):
+                    logger.info("Restart signal received, initiating restart...")
+                    break
+                    
+        except KeyboardInterrupt:
+            logger.info("Shutting down...")
+            break
+            
+        finally:
+            # Terminate child processes
+            logger.info("Terminating processes...")
+            for proc in [tracker_process, bot_process]:
+                if proc.is_alive():
+                    proc.terminate()
+                    proc.join(timeout=5)
+                    if proc.exitcode is None:
+                        logger.warning(f"Process {proc.name} did not terminate gracefully, forcing exit")
+                        proc.kill()
+            
+            # Check if we should restart
+            should_restart = os.path.exists('.restart')
+            
+            # Clean up restart file if it exists
+            if should_restart:
+                try:
+                    os.remove('.restart')
+                    logger.info("Restart file cleaned up")
+                except Exception as e:
+                    logger.warning(f"Failed to clean up restart file: {e}")
+            
+            # If we're here because of a restart, continue the outer loop
+            if should_restart:
+                logger.info("Restarting application...")
+                continue
+                
+            # If we're here because of a process death or keyboard interrupt, exit
+            logger.info("Shutting down application...")
+            break
     
-    # Start processes
-    tracker_process.start()
-    bot_process.start()
-    
-    try:
-        # Keep the main process running
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        # Terminate child processes on keyboard interrupt
-        tracker_process.terminate()
-        bot_process.terminate()
-        tracker_process.join()
-        bot_process.join()
-        logger.info("Processes terminated")
+    logger.info("Application shutdown complete")
 
 if __name__ == "__main__":
     main()

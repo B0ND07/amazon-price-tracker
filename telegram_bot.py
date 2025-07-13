@@ -216,7 +216,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🤖 <b>Amazon Price Tracker Bot</b>\n\n"
         "<b>Available commands:</b>\n"
         "• /start - Start the bot\n"
-        "• /help - Show this help message\n\n"
+        "• /help - Show this help message\n"
+        "• /restart - Restart the bot (Admin only)\n\n"
         "<b>Product Management:</b>\n"
         "• /add [url] [target_price] [tag] - Add a product to track\n"
         "• /remove [product_id] - Remove a product from tracking\n"
@@ -289,10 +290,23 @@ async def add_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔗 *URL:* {url}\n"
             f"🎯 *Target Price:* ₹{target_price:,.2f}\n"
             f"🆔 *ID:* `{product.id}`\n\n"
-            f"I'll notify you when the price drops! 🚀",
+            f"I'll notify you when the price drops! Restarting to apply changes... 🚀",
             parse_mode='Markdown',
             disable_web_page_preview=True
         )
+        
+        # Trigger a restart to pick up the new product immediately
+        logger.info("Triggering restart after adding new product")
+        try:
+            with open('.restart', 'w') as f:
+                f.write(str(time.time()))
+            logger.info("Restart file created, waiting for process manager to restart")
+        except Exception as e:
+            logger.error(f"Failed to create restart file: {e}")
+            await update.message.reply_text("⚠️ Added product but failed to trigger restart. Please restart manually.")
+        
+        # Stop the application to trigger the restart
+        context.application.stop_running()
     except ValueError:
         await update.message.reply_text("❌ Please provide a valid price number.")
     except Exception as e:
@@ -307,6 +321,8 @@ def escape_html(text: str) -> str:
 
 async def list_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List all tracked products."""
+    # Reload products from file to ensure we have the latest data
+    product_manager._load_products()
     products = product_manager.get_all_products()
     
     if not products:
@@ -442,6 +458,28 @@ def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     """Log Errors caused by Updates."""
     logger.warning('Update "%s" caused error "%s"', update, context.error)
 
+async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Restart the bot (Admin only)."""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ This command is restricted to administrators only.")
+        return
+    
+    await update.message.reply_text("🔄 Restarting the bot...")
+    logger.info("Restart requested by admin")
+    
+    # Signal the main process to restart by creating a restart file
+    try:
+        with open('.restart', 'w') as f:
+            f.write(str(time.time()))
+        logger.info("Restart file created, waiting for process manager to restart")
+    except Exception as e:
+        logger.error(f"Failed to create restart file: {e}")
+        await update.message.reply_text("❌ Failed to initiate restart. Please check logs.")
+        return
+    
+    # Stop the application
+    context.application.stop_running()
+
 def main() -> None:
     """Start the bot with enhanced connection settings and error handling."""
     # Load environment variables
@@ -490,6 +528,7 @@ def main() -> None:
             application.add_handler(CommandHandler("alertson", global_alerts_on))
             application.add_handler(CommandHandler("alertsoff", global_alerts_off))
             application.add_handler(CommandHandler("status", status))
+            application.add_handler(CommandHandler("restart", restart))
             
             # Log all errors
             application.add_error_handler(error_handler)

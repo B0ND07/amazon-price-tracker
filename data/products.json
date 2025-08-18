@@ -1,0 +1,22 @@
+{
+  "bd8e64c1-fad3-4b04-832b-6ac90dd7c9eb": {
+    "url": "https://amzn.in/d/iXj9L9L",
+    "target_price": 700.0,
+    "title": "Anker Type C to Type C 100W Flow Cable, 3ft Black, Powerline III Flow Cable, Super Fast Charging Cable (50% Charge in 30 mins), 25X More Durable, Data Sync Compatibility & Power Delivery (PD)",
+    "current_price": 898.0,
+    "coupon": null,
+    "id": "bd8e64c1-fad3-4b04-832b-6ac90dd7c9eb",
+    "tag": "typec",
+    "store_type": "amazon"
+  },
+  "2b53708d-02cb-467a-80d4-55f05c364db7": {
+    "url": "https://dl.flipkart.com/s/ATq6j3uuuN",
+    "target_price": 200.0,
+    "title": null,
+    "current_price": 0,
+    "coupon": null,
+    "id": "2b53708d-02cb-467a-80d4-55f05c364db7",
+    "tag": "envy",
+    "store_type": "flipkart"
+  }
+}

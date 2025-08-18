@@ -76,6 +76,12 @@ python main.py
 
 ---
 
+## Docker
+
+```bash
+docker build -t amazon . && docker run -v /root/amazon-price-tracker/data:/data amazon
+```
+
 ## 🧹 Project Structure
 
 ```

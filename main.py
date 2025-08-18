@@ -7,6 +7,7 @@ import multiprocessing
 import random
 import json
 import requests
+import smtplib
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 from datetime import datetime
@@ -67,7 +68,7 @@ def send_telegram_message(message: str) -> bool:
         logger.error(f"Failed to send Telegram message: {e}")
         return False
 
-PRODUCTS_FILE = 'products.json'
+PRODUCTS_FILE = '/data/products.json'
 
 class ProductManager:
     """Manages product data storage and retrieval."""
@@ -289,6 +290,10 @@ class PriceTracker:
         self.coupon_alert = coupon_alert
         self.product_manager = ProductManager()
         self.tracker_manager = TrackerManager(email, password)
+        
+        # Reload environment variables
+        from dotenv import load_dotenv
+        load_dotenv(dotenv_path="config.env", override=True)
         
         # Load global email alerts setting
         self.global_email_alerts = os.getenv('GLOBAL_EMAIL_ALERTS', 'True').lower() in ('true', '1', 't')
@@ -569,7 +574,7 @@ class PriceTracker:
                                 product.id,
                                 **{k: v for k, v in updates.items() if v is not None}
                             )
-                        self.send_email_alert(vars(product) if hasattr(product, '__dict__') else product, updates)
+                        # self.send_email_alert(vars(product) if hasattr(product, '__dict__') else product, updates)
                     
                     # Random delay between 3-7 seconds to avoid being blocked
                     time.sleep(random.uniform(3, 7))

@@ -10,5 +10,8 @@ COPY . .
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Create directory for persistent data
+RUN mkdir -p /data
+
 # Command to run the script
 CMD ["python", "main.py"]

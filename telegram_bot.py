@@ -23,7 +23,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Constants
-PRODUCTS_FILE = 'products.json'
+PRODUCTS_FILE = '/data/products.json'
 ADMIN_USER_ID = int(os.getenv('ADMIN_USER_ID', 0))
 
 from enum import Enum, auto

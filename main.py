@@ -68,7 +68,7 @@ def send_telegram_message(message: str) -> bool:
         logger.error(f"Failed to send Telegram message: {e}")
         return False
 
-PRODUCTS_FILE = '/data/products.json'
+PRODUCTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'products.json')
 
 class ProductManager:
     """Manages product data storage and retrieval."""

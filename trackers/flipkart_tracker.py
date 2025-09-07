@@ -1,12 +1,6 @@
 """Flipkart Price Tracker
 
 This module provides the FlipkartPriceTracker class which implements price tracking
-functionality specifically for Flipkart products.
-"""
-
-"""Flipkart Price Tracker
-
-This module provides the FlipkartPriceTracker class which implements price tracking
 functionality specifically for Flipkart products with anti-scraping measures.
 """
 
@@ -15,14 +9,20 @@ import re
 import time
 import random
 import json
+import os
 from typing import Dict, Any, Optional, Tuple, List, Union
 from urllib.parse import urljoin, urlparse, parse_qs
 from datetime import datetime
 
 import requests
 from bs4 import BeautifulSoup
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
 
 from .base import PriceTracker
 
@@ -42,7 +42,7 @@ class FlipkartPriceTracker(PriceTracker):
     
     This class implements the price tracking functionality specifically for Flipkart,
     including URL validation, price extraction, and stock status detection.
-    It includes various anti-scraping measures to avoid detection.
+    It includes various anti-scraping measures to avoid detection using Selenium WebDriver.
     """
     
     # Common Flipkart domain variations
@@ -54,7 +54,7 @@ class FlipkartPriceTracker(PriceTracker):
         'flipkart.in'
     ]
     
-    def __init__(self, email: str = None, password: str = None, max_retries: int = 3, delay_range: tuple = (1, 3)):
+    def __init__(self, email: str = None, password: str = None, max_retries: int = 3, delay_range: tuple = (1, 3), headless: bool = True):
         """Initialize the Flipkart price tracker.
         
         Args:
@@ -62,6 +62,7 @@ class FlipkartPriceTracker(PriceTracker):
             password: Password for email (unused, kept for compatibility)
             max_retries: Maximum number of retries for failed requests
             delay_range: Tuple of (min, max) delay between requests in seconds
+            headless: Whether to run the browser in headless mode
         """
         super().__init__()
         # Store email and password (not used currently but kept for compatibility)
@@ -77,58 +78,80 @@ class FlipkartPriceTracker(PriceTracker):
         except (TypeError, IndexError, ValueError):
             self.delay_range = (1.0, 3.0)
             
-        self._setup_session()
+        # Selenium WebDriver configuration
+        self.headless = headless
+        self.driver = None
+        self.cookies_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'flipkart_cookies.json')
+        
+        # Ensure data directory exists
+        os.makedirs(os.path.dirname(self.cookies_file), exist_ok=True)
     
-    def _setup_session(self) -> None:
-        """Set up the requests session with retry logic and headers."""
-        # Configure retry strategy
-        retry_strategy = Retry(
-            total=self.max_retries,
-            backoff_factor=1,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["GET", "POST"]
-        )
+    def _setup_browser(self) -> webdriver.Chrome:
+        """Set up and return a Chrome browser instance"""
+        if self.driver is not None:
+            try:
+                self.driver.quit()
+            except:
+                pass
         
-        # Create a session with retry
-        self.session = requests.Session()
-        adapter = requests.adapters.HTTPAdapter(max_retries=retry_strategy)
-        self.session.mount("http://", adapter)
-        self.session.mount("https://", adapter)
+        options = Options()
+        if self.headless:
+            options.add_argument("--headless=new")  # New headless mode for Chrome
         
-        # Set default headers
-        self.session.headers.update(self._get_random_headers())
+        # Add arguments to make browser less detectable
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument(f"--user-agent={random.choice(USER_AGENTS)}")
+        options.add_argument("--window-size=1920,1080")  # Set a standard resolution
+        
+        # Disable automation flags
+        options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        options.add_experimental_option("useAutomationExtension", False)
+        
+        # Initialize the Chrome driver
+        try:
+            service = Service(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=options)
+        except Exception as e:
+            logger.warning(f"Failed to install ChromeDriver using webdriver_manager: {e}")
+            # Fallback to system ChromeDriver
+            driver = webdriver.Chrome(options=options)
+        
+        # Additional settings to make selenium less detectable
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        
+        # Load cookies if they exist
+        if os.path.exists(self.cookies_file):
+            logger.info("Loading saved cookies...")
+            driver.get("https://www.flipkart.com")
+            try:
+                with open(self.cookies_file, 'r') as f:
+                    cookies = json.load(f)
+                    for cookie in cookies:
+                        driver.add_cookie(cookie)
+                logger.info("Cookies loaded successfully")
+            except Exception as e:
+                logger.warning(f"Error loading cookies: {e}")
+        
+        self.driver = driver
+        return driver
     
-    def _get_random_headers(self) -> Dict[str, str]:
-        """Get random headers to avoid detection.
-        
-        Returns:
-            Dict of HTTP headers
-        """
-        return {
-            'User-Agent': random.choice(USER_AGENTS),
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0',
-            'TE': 'trailers',
-            'DNT': '1',
-            'Referer': 'https://www.flipkart.com/'
-        }
+    def _save_cookies(self):
+        """Save cookies for future use"""
+        try:
+            if self.driver:
+                cookies = self.driver.get_cookies()
+                with open(self.cookies_file, 'w') as f:
+                    json.dump(cookies, f)
+                logger.info(f"Cookies saved to {self.cookies_file}")
+        except Exception as e:
+            logger.warning(f"Error saving cookies: {e}")
     
     def _random_delay(self) -> None:
         """Add a random delay between requests to avoid rate limiting."""
         delay = random.uniform(*self.delay_range)
         time.sleep(delay)
-        
-    def _update_headers(self) -> None:
-        """Update the session headers with a new random user agent."""
-        self.session.headers.update(self._get_random_headers())
     
     def is_valid_url(self, url: str) -> bool:
         """Check if the URL is a valid Flipkart product URL.
@@ -182,7 +205,7 @@ class FlipkartPriceTracker(PriceTracker):
             return False
     
     def get_product_info(self, url: str) -> Dict[str, Any]:
-        """Get product information from Flipkart with retry logic and anti-scraping measures.
+        """Get product information from Flipkart using Selenium WebDriver.
         
         Args:
             url: Product URL to fetch information from
@@ -206,180 +229,148 @@ class FlipkartPriceTracker(PriceTracker):
         if not self.is_valid_url(url):
             raise ValueError("Invalid Flipkart product URL")
         
-        # For short URLs, we'll get the final URL after redirects
-        parsed_url = urlparse(url)
-        if parsed_url.netloc == 'dl.flipkart.com' and parsed_url.path.startswith('/s/'):
-            max_short_url_attempts = 1  # Only try once for short URL resolution
-            for attempt in range(max_short_url_attempts):
-                try:
-                    # Make a HEAD request to get the final URL with a shorter timeout
-                    response = requests.head(
-                        url,
-                        headers=self._get_random_headers(),
-                        allow_redirects=True,
-                        timeout=10  # Increased from 5 to 10 seconds
-                    )
-                    clean_url = response.url
-                    logger.debug(f"Resolved short URL {url} to {clean_url}")
-                    
-                    # If we got redirected to the home page, the short URL might be invalid
-                    if 'flipkart.com' in clean_url and not any(x in clean_url for x in ['/p/', '/product/']):
-                        logger.warning(f"Short URL {url} redirected to home page, might be invalid")
-                        raise ValueError("Invalid product URL - redirected to home page")
-                    break
-                        
-                except (requests.Timeout, requests.RequestException) as e:
-                    if attempt == max_short_url_attempts - 1:  # Last attempt
-                        logger.warning(f"Failed to resolve short URL {url} after {attempt + 1} attempts: {e}")
-                        clean_url = url  # Fall back to original URL
-                    continue
-                except Exception as e:
-                    logger.warning(f"Unexpected error resolving short URL {url}: {e}")
-                    clean_url = url  # Fall back to original URL
-                    break
-        else:
-            # Normalize URL (remove tracking parameters, fragments, etc.)
-            clean_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}"
+        # Initialize the browser if not already done
+        if self.driver is None:
+            self._setup_browser()
         
-        # Adjust timeouts based on attempt number
-        for attempt in range(self.max_retries + 1):
+        for attempt in range(self.max_retries):
             try:
-                # Add a random delay between requests, increasing with each attempt
-                self._random_delay()
+                # Navigate to the URL
+                logger.info(f"Fetching URL: {url} (attempt {attempt + 1}/{self.max_retries})")
+                self.driver.get(url)
                 
-                # Update headers with a new user agent
-                self._update_headers()
-                
-                # Increase timeout with each retry (15s, 20s, 25s)
-                timeout = 15 + (5 * min(attempt, 2))  # Cap at 25s max
-                
-                logger.debug(f"Attempt {attempt + 1}/{self.max_retries + 1} - Fetching URL: {clean_url} (timeout: {timeout}s)")
-                
-                # Make the request with the adjusted timeout
-                response = self.session.get(
-                    clean_url,
-                    timeout=timeout,
-                    allow_redirects=True,
-                    headers={
-                        'Referer': 'https://www.flipkart.com/',
-                        'DNT': '1',
-                        'Accept-Encoding': 'gzip, deflate, br',
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                        'Connection': 'keep-alive'
-                    }
+                # Wait for the page to load
+                WebDriverWait(self.driver, 15).until(
+                    EC.presence_of_element_located((By.XPATH, "//body"))
                 )
                 
-                # Check for rate limiting or blocking
-                if response.status_code == 429:
-                    retry_after = int(response.headers.get('Retry-After', 30))
-                    logger.warning(f"Rate limited. Waiting {retry_after} seconds before retry...")
-                    time.sleep(retry_after)
-                    continue
-                    
-                response.raise_for_status()
+                # Small delay to ensure JavaScript executes
+                self._random_delay()
                 
-                # Check if we got redirected to a different page (e.g., product not found)
-                if response.url != clean_url and not self.is_valid_url(response.url):
-                    if 'captcha' in response.url.lower():
-                        raise ValueError("CAPTCHA encountered. Please try again later.")
-                    raise ValueError("Product not found or invalid URL")
+                # Check for login page or CAPTCHA
+                if "Login" in self.driver.title or "Enter Email/Mobile number" in self.driver.page_source:
+                    logger.warning("Login page detected. Attempting to close login dialog...")
+                    try:
+                        # Try to close the login dialog if it appears
+                        close_buttons = self.driver.find_elements(By.CSS_SELECTOR, "button._2KpZ6l._2doB4z, ._2doB4z, .xr2wzo")
+                        if close_buttons:
+                            close_buttons[0].click()
+                            logger.info("Successfully closed login dialog")
+                            self._random_delay()
+                        else:
+                            logger.warning("Could not find close button for login dialog")
+                    except Exception as e:
+                        logger.warning(f"Error closing login dialog: {e}")
                 
-                # Parse the response
-                soup = BeautifulSoup(response.text, 'lxml')
+                logger.info(f"Page title: {self.driver.title}")
                 
-                # Check for CAPTCHA page
-                if any(tag.name == 'title' and 'captcha' in tag.text.lower() for tag in soup.find_all('title')):
-                    raise ValueError("CAPTCHA encountered. Please try again later.")
+                # Extract product title
+                title = self._extract_title_selenium()
                 
-                break
+                # Extract price information
+                price_info = self._extract_price_info_selenium()
                 
-            except requests.exceptions.Timeout as e:
-                if attempt == self.max_retries:
-                    logger.error(f"Timeout after {self.max_retries + 1} attempts: {e}")
-                    raise Exception(f"Request timed out after {self.max_retries + 1} attempts") from e
+                # Check stock status
+                in_stock = self._check_stock_status_selenium()
                 
-                wait_time = (2 ** attempt) + random.random()  # Exponential backoff with jitter
-                logger.warning(f"Attempt {attempt + 1} timed out. Retrying in {wait_time:.1f} seconds...")
-                time.sleep(wait_time)
+                # Extract image URL
+                image_url = self._extract_image_url_selenium()
                 
-            except requests.exceptions.RequestException as e:
-                if attempt == self.max_retries:
-                    logger.error(f"Failed to fetch product info after {self.max_retries + 1} attempts: {e}")
-                    raise Exception(f"Request failed after {self.max_retries + 1} attempts: {e}") from e
+                # Save cookies after successful scraping
+                self._save_cookies()
                 
-                wait_time = (2 ** attempt) + random.random()  # Exponential backoff with jitter
-                logger.warning(f"Attempt {attempt + 1} failed: {e}. Retrying in {wait_time:.1f} seconds...")
-                time.sleep(wait_time)
-        else:
-            raise Exception(f"Failed to fetch product info after {self.max_retries + 1} attempts")
-            
-        try:
-            # Extract product information
-            title = self._extract_title(soup)
-            price_info = self._extract_price_info(soup)
-            in_stock = self._check_stock_status(soup)
-            image_url = self._extract_image_url(soup)
-            
-            # Build result dictionary
-            result = {
-                'title': title,
-                'price': price_info.get('current_price', 0),
-                'original_price': price_info.get('original_price'),
-                'discount': price_info.get('discount'),
-                'coupon': price_info.get('coupon'),
-                'in_stock': in_stock,
-                'url': clean_url,
-                'image_url': image_url,
-                'last_updated': datetime.utcnow().isoformat(),
-                'store': 'flipkart'
-            }
-            
-            logger.info(f"Successfully fetched product info: {title}")
-            logger.debug(f"Extracted product info: {result}")
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error parsing product info from {url}: {str(e)}")
-            raise ValueError(f"Failed to parse product information: {str(e)}")
+                # Build result dictionary
+                result = {
+                    'title': title,
+                    'price': price_info.get('current_price', 0),
+                    'original_price': price_info.get('original_price'),
+                    'discount': price_info.get('discount'),
+                    'coupon': price_info.get('coupon'),
+                    'in_stock': in_stock,
+                    'url': url,
+                    'image_url': image_url,
+                    'last_updated': datetime.utcnow().isoformat(),
+                    'store': 'flipkart'
+                }
+                
+                logger.info(f"Successfully fetched product info: {title}")
+                logger.debug(f"Extracted product info: {result}")
+                
+                return result
+                
+            except Exception as e:
+                logger.warning(f"Attempt {attempt + 1} failed for {url}: {e}")
+                if attempt < self.max_retries - 1:
+                    self._random_delay()
+                    # Restart the browser for the next attempt
+                    self._setup_browser()
+                else:
+                    logger.error(f"Failed to fetch {url} after {self.max_retries} attempts")
+                    raise ValueError(f"Failed to fetch product information: {str(e)}")
     
-    def _extract_title(self, soup: BeautifulSoup) -> str:
-        """Extract product title from the page.
+    def _extract_title_selenium(self) -> str:
+        """Extract product title from the page using Selenium.
         
-        Args:
-            soup: BeautifulSoup object of the product page
-            
         Returns:
             Extracted product title or 'Unknown Product' if not found
         """
-        # Try multiple selectors in order of preference
+        # Try multiple title selectors
         title_selectors = [
-            ('span', {'class': 'B_NuCI'}),  # Main title
-            ('h1', {'class': 'yhB1nd'}),    # Alternative title
-            ('h1', {'class': 'VU-ZEz'}),    # Another alternative
-            ('span', {'class': 'VU-ZEz'}),  # Sometimes in span
-            ('h1', {}),                     # Generic h1 as last resort
-            ('title', {})                   # Fallback to page title
+            "B_NuCI", 
+            ".B_NuCI", 
+            "h1._35KyD6", 
+            "h1.yhB1nd", 
+            "h1", 
+            "._35KyD6",
+            ".yhB1nd",
+            ".VU-ZEz"
         ]
         
-        for tag, attrs in title_selectors:
-            element = soup.find(tag, **attrs)
-            if element:
-                title = element.get_text(strip=True)
-                # Skip generic or empty titles
-                if title and title.lower() not in ('flipkart', 'online shopping'):
+        for selector in title_selectors:
+            try:
+                title_elem = self.driver.find_element(By.CSS_SELECTOR, selector)
+                title = title_elem.text.strip()
+                if title:
+                    logger.info(f"Found title: {title}")
                     return title
+            except:
+                continue
         
-        return 'Unknown Product'
+        # If we can't find the title, try a more generic approach
+        try:
+            # Look for any h1 element
+            h1_elements = self.driver.find_elements(By.TAG_NAME, "h1")
+            if h1_elements:
+                title = h1_elements[0].text.strip()
+                if title:
+                    logger.info(f"Found title from h1: {title}")
+                    return title
+        except:
+            pass
+        
+        # Finally, try the page title
+        try:
+            page_title = self.driver.title
+            if page_title and page_title.lower() not in ('flipkart', 'online shopping'):
+                # Remove common suffixes from page title
+                clean_title = re.sub(r'\s*[:-]\s*(Buy|Online|Flipkart|Shop).*$', '', page_title)
+                logger.info(f"Using page title: {clean_title}")
+                return clean_title
+        except:
+            pass
+        
+        logger.warning("Could not extract product title")
+        return "Unknown Product"
     
-    def _extract_price_info(self, soup: BeautifulSoup) -> Dict[str, Any]:
-        """Extract price information from the product page.
+    def _extract_price_info_selenium(self) -> Dict[str, Any]:
+        """Extract price information from the page using Selenium.
         
-        Args:
-            soup: BeautifulSoup object of the product page
-            
         Returns:
-            Dict with price information (current_price, original_price, discount, coupon)
+            Dictionary with price information:
+            - current_price: Current price (float)
+            - original_price: Original/MRP price (float) if available
+            - discount: Discount percentage if available
+            - coupon: Coupon/discount text if available
         """
         result = {
             'current_price': 0,
@@ -389,176 +380,371 @@ class FlipkartPriceTracker(PriceTracker):
         }
         
         try:
-            # Try to find the price in the main price container
-            price_container = soup.find('div', {'class': '_30jeq3 _16Jk6d'}) or \
-                            soup.find('div', {'class': '_30jeq3'}) or \
-                            soup.find('div', {'class': '_1vC4OE _3qQ9m1'}) or \
-                            soup.find('div', {'class': '_30jeq3 _16Jk6d _2tVp4j'})  # Another common price class
+            # Try to extract the current price
+            price_selectors = [
+                "._30jeq3", 
+                "._30jeq3._16Jk6d", 
+                "._30jeq3._1_WHN1",
+                "._16Jk6d",
+                ".CEmiEU div", 
+                "[data-testid='price-text']",
+                ".DJkZoR", 
+                "._3qQ9m1",
+                "*[class*='30jeq3']",  # More generic selector
+                "*[class*='price']"    # Very generic selector
+            ]
             
-            if price_container:
-                price_text = price_container.get_text(strip=True)
-                result['current_price'] = self._extract_price(price_text)
+            # First try CSS selectors
+            for selector in price_selectors:
+                try:
+                    # Wait for price element with a timeout
+                    WebDriverWait(self.driver, 5).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                    )
+                    price_elem = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    price_text = price_elem.text.strip()
+                    # Remove currency symbol and commas, then convert to float
+                    price_text = re.sub(r'[^\d.]', '', price_text.replace(',', ''))
+                    if price_text:
+                        result['current_price'] = float(price_text)
+                        logger.info(f"Found current price via selector: {result['current_price']}")
+                        break
+                except Exception as e:
+                    continue
+            
+            # If we couldn't find price with selectors, try regex patterns in page source
+            if result['current_price'] == 0:
+                page_source = self.driver.page_source
+                # Try to find price patterns in the page source
+                price_patterns = [
+                    r'"price":(\d+)', 
+                    r'"currentPrice":(\d+)',
+                    r'₹(\d+,\d+)',
+                    r'₹\s*(\d+,\d+)',
+                    r'price">\s*₹\s*(\d+,\d+)'
+                ]
                 
-                # If we found a price, try to find the original price (striked out)
-                if result['current_price'] > 0:
-                    original_price_elem = (
-                        soup.find('div', {'class': '_3I9_wc _2p6lqe'}) or  # New UI
-                        soup.find('div', {'class': '_3I9_wc _2p6lqe _30jeq3'}) or
-                        soup.find('div', {'class': '_3auQ3N _1POkHg'}) or  # Old UI
-                        soup.find('div', {'class': '_3I9_wc _2p6lqe'})    # Another variant
-                    )
-                    
-                    if original_price_elem:
-                        original_price_text = original_price_elem.get_text(strip=True)
-                        result['original_price'] = self._extract_price(original_price_text)
-                    
-                    # Try to find discount percentage
-                    discount_elem = (
-                        soup.find('div', {'class': '_3Ay6Sb'}) or  # New UI
-                        soup.find('div', {'class': 'VGWI6T'}) or    # Another variant
-                        soup.find('span', {'class': '_3Ay6Sb'}) or  # Sometimes in span
-                        soup.find('div', {'class': '_3I9_wc'}).find_next_sibling('div')  # Next to price
-                        if soup.find('div', {'class': '_3I9_wc'}) else None
-                    )
-                    
-                    if discount_elem:
-                        discount_text = discount_elem.get_text(strip=True)
-                        # Extract percentage (e.g., "10% off" -> 10)
-                        match = re.search(r'(\d+)%', discount_text)
-                        if match:
-                            result['discount'] = int(match.group(1))
-                        
-                        # If we have a discount but no original price, try to calculate it
-                        if result['discount'] and not result['original_price'] and result['current_price']:
-                            try:
-                                discount_factor = 1 - (result['discount'] / 100)
-                                result['original_price'] = round(result['current_price'] / discount_factor, 2)
-                            except (ZeroDivisionError, TypeError):
-                                pass
-            
-            # If we still don't have a price, try alternative selectors
-            if result['current_price'] <= 0:
-                # Try to find price in script tags (common for dynamic content)
-                script_tags = soup.find_all('script', type='application/ld+json')
-                for script in script_tags:
-                    try:
-                        data = json.loads(script.string)
-                        if isinstance(data, dict) and 'offers' in data and 'price' in data['offers']:
-                            result['current_price'] = float(data['offers']['price'])
+                for pattern in price_patterns:
+                    matches = re.findall(pattern, page_source)
+                    if matches:
+                        price_text = matches[0].replace(',', '')
+                        try:
+                            result['current_price'] = float(price_text)
+                            logger.info(f"Found current price via regex: {result['current_price']}")
                             break
-                        elif isinstance(data, list):
-                            for item in data:
-                                if isinstance(item, dict) and 'offers' in item and 'price' in item['offers']:
-                                    result['current_price'] = float(item['offers']['price'])
-                                    break
-                    except (json.JSONDecodeError, (AttributeError, KeyError, ValueError)):
-                        continue
+                        except (ValueError, TypeError):
+                            continue
             
-            # Original price (MRP)
-            original_price_elem = (
-                soup.find('div', {'class': '_3I9_wc _2p6lqe'}) or  # New UI
-                soup.find('div', {'class': '_3auQ3N _1POkHg'})     # Old UI
-            )
+            # Try to extract the original price (MRP)
+            mrp_selectors = [
+                "._3I9_wc", 
+                "._3I9_wc._2p6lqe", 
+                "._3I9_wc._27UcVY",
+                ".CEmiEU > div:nth-child(2)",
+                "[data-testid='original-price']"
+            ]
             
-            if original_price_elem:
-                original_price_str = original_price_elem.get_text(strip=True)
-                result['original_price'] = self._extract_price(original_price_str)
+            for selector in mrp_selectors:
+                try:
+                    mrp_elem = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    mrp_text = mrp_elem.text.strip()
+                    # Remove currency symbol and commas, then convert to float
+                    mrp_text = re.sub(r'[^\d.]', '', mrp_text.replace(',', ''))
+                    if mrp_text:
+                        result['original_price'] = float(mrp_text)
+                        logger.info(f"Found original price: {result['original_price']}")
+                        break
+                except Exception as e:
+                    continue
             
-            # Discount percentage
-            discount_elem = soup.find('div', {'class': '_3Ay6Sb'}) or soup.find('div', {'class': 'VGWI6T'})
-            if discount_elem:
-                discount_text = discount_elem.get_text(strip=True)
-                # Extract percentage (e.g., "10% off" -> 10)
-                match = re.search(r'(\d+)%', discount_text)
-                if match:
-                    result['discount'] = int(match.group(1))
+            # If we couldn't find original price with selectors, try regex patterns
+            if result['original_price'] is None:
+                page_source = self.driver.page_source
+                mrp_patterns = [
+                    r'MRP.*?₹\s*(\d+,\d+)',
+                    r'original_price.*?(\d+)',
+                    r'strikethrough.*?₹\s*(\d+,\d+)'
+                ]
                 
-                # If we have a discount but no original price, try to calculate it
-                if result['discount'] and result['current_price'] and not result['original_price']:
-                    try:
-                        discount_factor = 1 - (result['discount'] / 100)
-                        result['original_price'] = round(result['current_price'] / discount_factor, 2)
-                    except (ZeroDivisionError, TypeError):
-                        pass
+                for pattern in mrp_patterns:
+                    matches = re.findall(pattern, page_source)
+                    if matches:
+                        mrp_text = matches[0].replace(',', '')
+                        try:
+                            result['original_price'] = float(mrp_text)
+                            logger.info(f"Found original price via regex: {result['original_price']}")
+                            break
+                        except (ValueError, TypeError):
+                            continue
             
-            # Coupon/discount information
-            coupon_elem = (
-                soup.find('div', {'class': '_3D89xM'}) or  # Coupon text
-                soup.find('div', {'class': '_2TpdnF'})     # Bank offers
-            )
+            # Try to extract discount percentage
+            discount_selectors = [
+                "._3Ay6Sb", 
+                "._3Ay6Sb._31Dcoz", 
+                "._1V_ZGU",
+                "[data-testid='discount-text']"
+            ]
             
-            if coupon_elem:
-                result['coupon'] = coupon_elem.get_text(strip=True)
+            for selector in discount_selectors:
+                try:
+                    discount_elem = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    discount_text = discount_elem.text.strip()
+                    # Extract percentage using regex
+                    match = re.search(r'(\d+)%', discount_text)
+                    if match:
+                        result['discount'] = match.group(1) + '%'
+                        logger.info(f"Found discount: {result['discount']}")
+                        break
+                except Exception as e:
+                    continue
+            
+            # If we couldn't find discount with selectors, try regex patterns
+            if result['discount'] is None:
+                page_source = self.driver.page_source
+                discount_patterns = [
+                    r'(\d+)%\s*off',
+                    r'discount.*?(\d+)%'
+                ]
+                
+                for pattern in discount_patterns:
+                    matches = re.findall(pattern, page_source)
+                    if matches:
+                        try:
+                            result['discount'] = matches[0] + '%'
+                            logger.info(f"Found discount via regex: {result['discount']}")
+                            break
+                        except (ValueError, TypeError, IndexError):
+                            continue
+            
+            # Try to extract any coupon/offer text
+            coupon_selectors = [
+                "._3xFhiH", 
+                "._3TT44I", 
+                ".dyC4hf",
+                "[data-testid='offer-text']"
+            ]
+            
+            for selector in coupon_selectors:
+                try:
+                    coupon_elems = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    if coupon_elems:
+                        result['coupon'] = coupon_elems[0].text.strip()
+                        logger.info(f"Found coupon: {result['coupon']}")
+                        break
+                except Exception as e:
+                    continue
                 
         except Exception as e:
             logger.warning(f"Error extracting price info: {e}")
-        
+            
         return result
     
-    def _check_stock_status(self, soup: BeautifulSoup) -> bool:
-        """Check if the product is in stock.
+    def _check_stock_status_selenium(self) -> bool:
+        """Check if the product is in stock using Selenium.
         
-        Args:
-            soup: BeautifulSoup object of the product page
-            
         Returns:
-            bool: True if in stock, False otherwise
+            Boolean indicating if product is in stock
         """
-        # Check for out of stock indicators
-        out_of_stock_indicators = [
-            ('div', {'class': '_9aUb2-'}),  # Out of stock message
-            ('button', {'class': '_2KpZ6l _2U9uOA _3v1-ww _3W_3L- disabled'}),  # Disabled Add to Cart
-            ('button', {'class': '_2KpZ6l _2U9uOA _3v1-ww _3W_3L-'}),  # Out of stock button
-            ('div', {'class': '_2sKwjB'})  # Notify me when available
-        ]
-        
-        for tag, attrs in out_of_stock_indicators:
-            if soup.find(tag, attrs):
-                return False
-        
-        # Check for in-stock indicators
-        in_stock_indicators = [
-            ('button', {'class': '_2KpZ6l _2U9uOA _3v1-ww'}),  # Add to Cart button
-            ('button', {'class': '_2KpZ6l _2U9uOA _3v1-ww _3W_3L-'}),  # Add to Cart button (variant)
-            ('div', {'class': '_16FRp0'})  # Available offers
-        ]
-        
-        for tag, attrs in in_stock_indicators:
-            if soup.find(tag, attrs):
-                return True
-        
-        # Default to in-stock if no clear indicators found
-        return True
-    
-    def _extract_image_url(self, soup: BeautifulSoup) -> Optional[str]:
-        """Extract the product image URL.
-        
-        Args:
-            soup: BeautifulSoup object of the product page
+        try:
+            # Look for out-of-stock indicators
+            out_of_stock_selectors = [
+                "._16FRp0", 
+                "._1dVbu9", 
+                "._397wMz",
+                "[data-testid='out-of-stock']"
+            ]
             
+            for selector in out_of_stock_selectors:
+                try:
+                    elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    if elements and any('out of stock' in element.text.lower() for element in elements):
+                        logger.info(f"Found out-of-stock indicator: {selector}")
+                        return False
+                except:
+                    continue
+                    
+            # Check for "sold out" or "out of stock" text in the page
+            page_text = self.driver.page_source.lower()
+            sold_out_texts = ['sold out', 'out of stock', 'currently unavailable']
+            if any(text in page_text for text in sold_out_texts):
+                # If we find sold out text, check if buy buttons still exist
+                buy_button_selectors = [
+                    "._2KpZ6l", 
+                    "._2KpZ6l._2U9uOA._3v1-ww", 
+                    "._2KpZ6l._1t_O3S",
+                    "._1p3MFP._31gJgq",
+                    "[data-testid='add-to-cart']",
+                    "[data-testid='buy-now']"
+                ]
+                
+                found_buy_button = False
+                for selector in buy_button_selectors:
+                    try:
+                        buttons = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                        if buttons:
+                            found_buy_button = True
+                            break
+                    except:
+                        continue
+                        
+                if not found_buy_button:
+                    logger.info("Found 'sold out' text and no buy buttons")
+                    return False
+            
+            # Check if there's a buy button or add to cart button
+            buy_button_selectors = [
+                "._2KpZ6l", 
+                "._2KpZ6l._2U9uOA._3v1-ww", 
+                "._2KpZ6l._1t_O3S",
+                "._1p3MFP._31gJgq",
+                "[data-testid='add-to-cart']",
+                "[data-testid='buy-now']"
+            ]
+            
+            for selector in buy_button_selectors:
+                try:
+                    buttons = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    if buttons:
+                        for button in buttons:
+                            button_text = button.text.lower()
+                            if any(text in button_text for text in ['add', 'cart', 'buy']):
+                                logger.info(f"Found buy button: {button_text}")
+                                return True
+                except:
+                    continue
+            
+            # Look for price patterns in the page source - if we find a price, assume in stock
+            page_source = self.driver.page_source
+            price_patterns = [
+                r'"price":(\d+)', 
+                r'"currentPrice":(\d+)',
+                r'₹(\d+,\d+)',
+                r'₹\s*(\d+,\d+)'
+            ]
+            
+            for pattern in price_patterns:
+                if re.search(pattern, page_source):
+                    logger.info(f"Found price pattern, assuming in stock")
+                    return True
+                    
+            logger.warning("Could not determine stock status, defaulting to False")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error checking stock status: {e}")
+            return False
+    
+    def _extract_image_url_selenium(self) -> Optional[str]:
+        """Extract the product image URL using Selenium.
+        
         Returns:
             URL of the product image or None if not found
         """
         try:
-            # Try to find the main product image
-            img_elem = (
-                soup.find('img', {'class': '_396cs4'}) or  # New UI
-                soup.find('img', {'class': '_1Nyybr'}) or  # Alternative
-                soup.find('div', {'class': 'CXW8mj'}).find('img') if soup.find('div', {'class': 'CXW8mj'}) else None  # Container with img
-            )
+            # Try different image selectors
+            image_selectors = [
+                "._396cs4", 
+                "._2r_T1I", 
+                "#productImage",
+                ".CXW8mj img",
+                "[data-testid='product-image']",
+                "._3GnUWp img",
+                "._3GnUWp ._2puWtW._3a3qyb"
+            ]
             
-            if img_elem and img_elem.get('src'):
-                return img_elem['src']
-                
-            # Try background image in style attribute
-            container = soup.find('div', {'class': '_3BTv9X'}) or soup.find('div', {'class': 'q6DClP'})
-            if container and container.get('style'):
-                # Extract URL from style="background-image:url('...')
-                match = re.search(r"url\('([^']+)'\)", container['style'])
-                if match:
-                    return match.group(1)
+            for selector in image_selectors:
+                try:
+                    img_elems = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                    if img_elems:
+                        for img in img_elems:
+                            src = img.get_attribute('src')
+                            if src and src.startswith('http'):
+                                logger.info(f"Found image URL: {src}")
+                                return src
+                            
+                            # For elements with background-image in style
+                            style = img.get_attribute('style')
+                            if style:
+                                match = re.search(r'url\(["\']?(.*?)["\']?\)', style)
+                                if match:
+                                    url = match.group(1)
+                                    if url.startswith('http'):
+                                        logger.info(f"Found image URL in style: {url}")
+                                        return url
+                except:
+                    continue
+            
+            # Last resort: check for any product image
+            try:
+                all_images = self.driver.find_elements(By.TAG_NAME, 'img')
+                for img in all_images:
+                    src = img.get_attribute('src')
+                    alt = img.get_attribute('alt') or ''
+                    alt = alt.lower()
+                    # Look for image with product-related alt text
+                    if src and src.startswith('http') and ('product' in alt or 'item' in alt):
+                        logger.info(f"Found image URL from alt text: {src}")
+                        return src
+                        
+                # If we still haven't found an image, take the first image that looks like a product
+                for img in all_images:
+                    src = img.get_attribute('src')
+                    if src and src.startswith('http') and any(x in src for x in ['product', 'image', 'photo']):
+                        if not ('icon' in src or 'logo' in src or 'banner' in src):
+                            logger.info(f"Found potential product image: {src}")
+                            return src
+                            
+                # Last resort: just use any reasonably sized image
+                for img in all_images:
+                    try:
+                        width = int(img.get_attribute('width') or 0)
+                        height = int(img.get_attribute('height') or 0)
+                        src = img.get_attribute('src')
+                        if src and src.startswith('http') and width > 100 and height > 100:
+                            logger.info(f"Found sized image: {src}")
+                            return src
+                    except:
+                        continue
+            except Exception as e:
+                logger.warning(f"Error searching all images: {e}")
                     
+            logger.warning("Could not find any product image")
+            return None
+                
         except Exception as e:
-            logger.debug(f"Error extracting image URL: {e}")
+            logger.error(f"Error extracting image URL: {e}")
+            return None
+    
+    def _extract_price(self, price_text: str) -> float:
+        """Extract price as float from price text by removing currency symbols and commas.
+        
+        Args:
+            price_text: Price text with currency symbols, commas, etc.
             
-        return None
+        Returns:
+            float: Extracted price or 0 if extraction fails
+        """
+        try:
+            # Remove non-numeric characters except the decimal point
+            price_text = re.sub(r'[^\d.]', '', price_text.replace(',', ''))
+            
+            # Convert to float
+            if price_text:
+                return float(price_text)
+        except (ValueError, AttributeError) as e:
+            logger.debug(f"Error extracting price from '{price_text}': {e}")
+            
+        return 0.0
+    
+    def cleanup(self):
+        """Clean up resources when the tracker is no longer needed."""
+        try:
+            if self.driver:
+                self.driver.quit()
+                self.driver = None
+        except Exception as e:
+            logger.warning(f"Error cleaning up WebDriver: {e}")
+            
+    def __del__(self):
+        """Destructor to ensure resources are properly released."""
+        self.cleanup()

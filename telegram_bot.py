@@ -23,7 +23,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Constants
-PRODUCTS_FILE = '/data/products.json'
+PRODUCTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'products.json')
 ADMIN_USER_ID = int(os.getenv('ADMIN_USER_ID', 0))
 
 from enum import Enum, auto
@@ -454,7 +454,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(message, parse_mode='HTML')
     logger.info(f"Status sent to user {update.effective_user.id}")
 
-def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     """Log Errors caused by Updates."""
     logger.warning('Update "%s" caused error "%s"', update, context.error)
 
@@ -538,7 +538,11 @@ def main() -> None:
             application.run_polling(
                 drop_pending_updates=True,
                 allowed_updates=Update.ALL_TYPES,
-                close_loop=False
+                close_loop=False,
+                pool_timeout=30.0,
+                read_timeout=30.0,
+                write_timeout=30.0
+                # Removed connection_pool_size which is not supported in this version
             )
             break  # If we get here, the bot has stopped gracefully
             

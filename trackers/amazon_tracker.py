@@ -155,33 +155,145 @@ class AmazonPriceTracker(PriceTracker):
     def _extract_price_from_json_ld(self, soup: BeautifulSoup) -> Optional[float]:
         """Extract price from JSON-LD structured data."""
         try:
-            script = soup.find('script', type='application/ld+json')
-            if script:
-                data = json.loads(script.string)
-                if isinstance(data, dict) and 'offers' in data:
-                    if isinstance(data['offers'], list) and data['offers']:
-                        offer = data['offers'][0]
-                        price = offer.get('price')
-                        if price:
-                            return float(price)
-                    elif isinstance(data['offers'], dict):
-                        price = data['offers'].get('price')
-                        if price:
-                            return float(price)
-        except (json.JSONDecodeError, (AttributeError, KeyError, ValueError, TypeError)) as e:
+            # Look for all JSON-LD scripts
+            scripts = soup.find_all('script', type='application/ld+json')
+            
+            # First, try to find the script with the expected product type
+            product_data = None
+            for script in scripts:
+                if not script or not script.string:
+                    continue
+                
+                try:
+                    data = json.loads(script.string)
+                    
+                    # Look for the main product data
+                    if isinstance(data, dict) and data.get('@type') in ['Product', 'IndividualProduct']:
+                        product_data = data
+                        break
+                    
+                    # Sometimes the product is in a graph array
+                    if isinstance(data, dict) and '@graph' in data and isinstance(data['@graph'], list):
+                        for item in data['@graph']:
+                            if isinstance(item, dict) and item.get('@type') in ['Product', 'IndividualProduct']:
+                                product_data = item
+                                break
+                        if product_data:
+                            break
+                except:
+                    continue
+            
+            # If we found product data, extract the price
+            if product_data and 'offers' in product_data:
+                if isinstance(product_data['offers'], list) and product_data['offers']:
+                    offer = product_data['offers'][0]
+                    price = offer.get('price')
+                    if price:
+                        return float(price)
+                elif isinstance(product_data['offers'], dict):
+                    price = product_data['offers'].get('price')
+                    if price:
+                        return float(price)
+            
+            # If no specific product data was found, try the first price we can find
+            for script in scripts:
+                if not script or not script.string:
+                    continue
+                
+                try:
+                    data = json.loads(script.string)
+                    
+                    # Handle different JSON-LD structures
+                    if isinstance(data, dict):
+                        # Check for direct price property
+                        if 'offers' in data:
+                            if isinstance(data['offers'], list) and data['offers']:
+                                offer = data['offers'][0]
+                                price = offer.get('price')
+                                if price:
+                                    return float(price)
+                            elif isinstance(data['offers'], dict):
+                                price = data['offers'].get('price')
+                                if price:
+                                    return float(price)
+                        
+                        # Sometimes nested in an array
+                        if '@graph' in data and isinstance(data['@graph'], list):
+                            for item in data['@graph']:
+                                if isinstance(item, dict) and 'offers' in item:
+                                    if isinstance(item['offers'], list) and item['offers']:
+                                        offer = item['offers'][0]
+                                        price = offer.get('price')
+                                        if price:
+                                            return float(price)
+                                    elif isinstance(item['offers'], dict):
+                                        price = item['offers'].get('price')
+                                        if price:
+                                            return float(price)
+                    elif isinstance(data, list):
+                        # Check each item in the array
+                        for item in data:
+                            if isinstance(item, dict) and 'offers' in item:
+                                if isinstance(item['offers'], list) and item['offers']:
+                                    offer = item['offers'][0]
+                                    price = offer.get('price')
+                                    if price:
+                                        return float(price)
+                                elif isinstance(item['offers'], dict):
+                                    price = item['offers'].get('price')
+                                    if price:
+                                        return float(price)
+                except:
+                    continue
+                    
+        except Exception as e:
             logger.debug(f"Error extracting price from JSON-LD: {e}")
         return None
     
     def _extract_price_from_script(self, soup: BeautifulSoup) -> Optional[float]:
         """Extract price from JavaScript data in the page."""
         try:
-            # Look for price in the page's JavaScript data
+            # Look for price in the page's JavaScript data, specifically in data elements 
+            # that are clearly about the main product
+            product_data_scripts = []
+            
+            # Target price-related scripts
             for script in soup.find_all('script'):
-                if script.string and 'price' in script.string.lower():
-                    # Try to find a price pattern in the script
-                    matches = re.search(r'"price"\s*:\s*["\']?([\d.,]+)', script.string)
+                if not script.string:
+                    continue
+                    
+                script_text = script.string.lower()
+                # Filter scripts that are likely to contain main product price
+                if any(term in script_text for term in [
+                    'priceblock', 
+                    'product.price', 
+                    'saleprice', 
+                    '"price"', 
+                    'twister-plus-price',
+                    'product-price',
+                    'currentprice'
+                ]):
+                    product_data_scripts.append(script.string)
+            
+            # Process filtered scripts
+            for script_text in product_data_scripts:
+                # Amazon often uses these specific patterns for main product price
+                price_patterns = [
+                    r'"price"\s*:\s*["\']?([\d.,]+)["\']?',  # "price": "123.45"
+                    r'"currentPrice"\s*:\s*["\']?([\d.,]+)["\']?',  # "currentPrice": "123.45"
+                    r'"listPrice"\s*:\s*["\']?([\d.,]+)["\']?',  # "listPrice": "123.45" 
+                    r'"priceAmount"\s*:\s*([\d.,]+)',  # "priceAmount": 123.45
+                    r'"dealPrice"\s*:\s*["\']?([\d.,]+)["\']?',  # "dealPrice": "123.45"
+                    r'asin\b[^}]+"price"\s*:\s*["\']?([\d.,]+)["\']?'  # Price near ASIN reference
+                ]
+                
+                for pattern in price_patterns:
+                    matches = re.search(pattern, script_text)
                     if matches:
-                        return float(matches.group(1).replace(',', ''))
+                        price_str = matches.group(1).replace(',', '')
+                        price = float(price_str)
+                        if price > 0:
+                            return price
         except (AttributeError, ValueError, TypeError) as e:
             logger.debug(f"Error extracting price from script: {e}")
         return None
@@ -207,6 +319,117 @@ class AmazonPriceTracker(PriceTracker):
             return True
             
         return False
+    
+    def _extract_asin(self, url: str) -> Optional[str]:
+        """Extract the ASIN from an Amazon URL."""
+        asin_patterns = [
+            r'/dp/([A-Z0-9]{10})(?:/|$)',
+            r'/gp/product/([A-Z0-9]{10})(?:/|$)',
+            r'/product/([A-Z0-9]{10})(?:/|$)',
+            r'/ASIN/([A-Z0-9]{10})(?:/|$)',
+            r'asin=([A-Z0-9]{10})(?:&|$)'
+        ]
+        
+        for pattern in asin_patterns:
+            match = re.search(pattern, url)
+            if match:
+                return match.group(1)
+        return None
+    
+    def _verify_product_page(self, soup: BeautifulSoup, url: str) -> bool:
+        """Verify we're on the correct product page, not a search or related items page."""
+        # Extract expected ASIN from the URL
+        expected_asin = self._extract_asin(url)
+        if not expected_asin:
+            return True  # Can't verify, assume it's correct
+        
+        # Check for search results indicators
+        search_indicators = [
+            soup.find('div', {'id': 'search'}),
+            soup.find('div', {'id': 'searchTemplate'}),
+            soup.find('span', {'id': 's-result-count'}),
+            soup.find('h1', {'class': 'a-size-base s-desktop-toolbar'}),
+            soup.find('div', {'class': 's-search-results'})
+        ]
+        
+        if any(indicator for indicator in search_indicators):
+            logger.warning(f"Found search page indicators for URL: {url}")
+            return False  # We're on a search page, not a product page
+        
+        # Check for "product not found" or "page not found" indicators
+        not_found_indicators = [
+            'page not found',
+            'product not found',
+            'we couldn\'t find that page',
+            'looking for something?',
+            'sorry, we just need to make sure you\'re not a robot'
+        ]
+        
+        page_text = soup.get_text().lower()
+        if any(indicator in page_text for indicator in not_found_indicators):
+            logger.warning(f"Found 'not found' indicators for URL: {url}")
+            return False
+        
+        # Check if we're on a category page
+        category_indicators = [
+            soup.find('div', {'id': 'departments'}),
+            soup.find('div', {'id': 'leftNav'}),
+            soup.find('div', {'id': 'refinements'})
+        ]
+        
+        if any(indicator for indicator in category_indicators) and not soup.find('div', {'id': 'dp'}):
+            logger.warning(f"Found category page indicators for URL: {url}")
+            return False
+        
+        # Positive indicators that we're on a product page
+        product_indicators = [
+            soup.find('div', {'id': 'dp'}),
+            soup.find('div', {'id': 'prodDetails'}),
+            soup.find('div', {'id': 'detail-bullets'}),
+            soup.find('div', {'id': 'centerCol'}),
+            soup.find('div', {'id': 'title_feature_div'})
+        ]
+        
+        if any(indicator for indicator in product_indicators):
+            # Try to find ASIN on the page to verify it's the correct product
+            page_asin = None
+            
+            # Method 1: Check data-asin attribute on elements
+            elements_with_asin = soup.find_all(attrs={"data-asin": True})
+            for elem in elements_with_asin:
+                if elem.get('data-asin') == expected_asin:
+                    page_asin = elem.get('data-asin')
+                    break
+            
+            # Method 2: Look for ASIN in scripts
+            if not page_asin:
+                for script in soup.find_all('script'):
+                    if script.string and expected_asin in script.string:
+                        page_asin = expected_asin
+                        break
+            
+            # Method 3: Check for ASIN in the product details section
+            if not page_asin:
+                detail_sections = soup.find_all(['div', 'ul', 'table'], class_=['detail', 'details', 'product-details', 'productDetails'])
+                for section in detail_sections:
+                    if expected_asin in section.get_text():
+                        page_asin = expected_asin
+                        break
+            
+            # Method 4: Look for ASIN in the URL of canonical link or other meta elements
+            if not page_asin:
+                canonical_link = soup.find('link', {'rel': 'canonical'})
+                if canonical_link and 'href' in canonical_link.attrs and expected_asin in canonical_link['href']:
+                    page_asin = expected_asin
+            
+            # If we found an ASIN on the page, verify it matches the expected one
+            if page_asin:
+                return page_asin == expected_asin
+        
+        # If we're here, we couldn't definitively say it's wrong, so assume it's right
+        # but log a warning
+        logger.warning(f"Could not definitively verify product page for URL: {url}")
+        return True
     
     def get_product_info(self, url: str) -> Dict[str, Any]:
         """Get product information from Amazon with retry logic and anti-scraping measures.
@@ -262,6 +485,11 @@ class AmazonPriceTracker(PriceTracker):
                     self._setup_session()  # Reset session to get new headers
                     continue
                 
+                # Verify we're on the correct product page, not a search or similar items page
+                if not self._verify_product_page(soup, url):
+                    logger.warning(f"Not on the correct product page for URL: {url}. Retrying...")
+                    continue
+                
                 # Extract product title (try multiple selectors)
                 title = 'Unknown Product'
                 title_selectors = [
@@ -286,27 +514,95 @@ class AmazonPriceTracker(PriceTracker):
                 # Method 1: Try structured data (JSON-LD)
                 price = self._extract_price_from_json_ld(soup)
                 
-                # Method 2: Try various price selectors
+                # Method 2: Try various price selectors, ensuring we're getting the main product price
                 if not price:
-                    price_selectors = [
-                        ('span', {'class': 'a-price-whole'}),
-                        ('span', {'id': 'priceblock_ourprice'}),
-                        ('span', {'id': 'priceblock_dealprice'}),
-                        ('span', {'class': 'a-offscreen'}),
-                        ('span', {'class': 'a-color-price'}),
-                        ('span', {'class': 'a-price'}),
+                    # Check if we're in the buybox area - this is the most reliable for the current price
+                    buybox_containers = [
+                        soup.find('div', {'id': 'buybox'}),
+                        soup.find('div', {'id': 'buyNew_noncbb'}),
+                        soup.find('div', {'id': 'unqualifiedBuyBox'})
                     ]
                     
-                    for tag, attrs in price_selectors:
-                        elem = soup.find(tag, attrs)
-                        if elem:
-                            price_text = elem.get_text(strip=True)
-                            try:
-                                price = float(re.sub(r'[^\d.]', '', price_text))
-                                if price > 0:
+                    # Filter out None values
+                    buybox_containers = [c for c in buybox_containers if c is not None]
+                    
+                    if buybox_containers:
+                        for container in buybox_containers:
+                            # Look for specific buybox price elements
+                            price_elements = container.select('.a-color-price, .a-size-medium.a-color-price, .a-price')
+                            for elem in price_elements:
+                                # Look for the price in this element or its children
+                                price_elem = elem.select_one('.a-offscreen') or elem
+                                if price_elem:
+                                    price_text = price_elem.get_text(strip=True)
+                                    try:
+                                        price = float(re.sub(r'[^\d.]', '', price_text))
+                                        if price > 0:
+                                            break
+                                    except (ValueError, TypeError):
+                                        continue
+                            
+                            if price and price > 0:
+                                break
+                    
+                    # If not found in buybox, check for the main product price wrapper
+                    if not price or price <= 0:
+                        main_price_containers = [
+                            soup.find('div', {'id': 'corePrice_desktop'}),
+                            soup.find('div', {'id': 'corePrice_feature_div'}),
+                            soup.find('div', {'id': 'corePriceDisplay_desktop_feature_div'}),
+                            soup.find('div', {'id': 'price'}),
+                            soup.find('div', {'data-feature-name': 'corePrice'})
+                        ]
+                        
+                        # Filter out None values
+                        main_price_containers = [c for c in main_price_containers if c is not None]
+                        
+                        if main_price_containers:
+                            # If we found a main price container, search within it for the price
+                            for container in main_price_containers:
+                                price_selectors = [
+                                    ('span', {'class': 'a-price-whole'}),
+                                    ('span', {'id': 'priceblock_ourprice'}),
+                                    ('span', {'id': 'priceblock_dealprice'}),
+                                    ('span', {'class': 'a-offscreen'}),
+                                    ('span', {'class': 'a-color-price'}),
+                                    ('span', {'class': 'a-price'})
+                                ]
+                                
+                                for tag, attrs in price_selectors:
+                                    elem = container.find(tag, attrs)
+                                    if elem:
+                                        price_text = elem.get_text(strip=True)
+                                        try:
+                                            price = float(re.sub(r'[^\d.]', '', price_text))
+                                            if price > 0:
+                                                break
+                                        except (ValueError, TypeError):
+                                            continue
+                                
+                                if price and price > 0:
                                     break
-                            except (ValueError, TypeError):
-                                continue
+                    
+                    # If we still don't have a price, try the broader search but with caution
+                    if not price or price <= 0:
+                        # These IDs are specific to the main product price
+                        specific_price_selectors = [
+                            ('span', {'id': 'priceblock_ourprice'}),
+                            ('span', {'id': 'priceblock_dealprice'}),
+                            ('span', {'id': 'priceblock_saleprice'})
+                        ]
+                        
+                        for tag, attrs in specific_price_selectors:
+                            elem = soup.find(tag, attrs)
+                            if elem:
+                                price_text = elem.get_text(strip=True)
+                                try:
+                                    price = float(re.sub(r'[^\d.]', '', price_text))
+                                    if price > 0:
+                                        break
+                                except (ValueError, TypeError):
+                                    continue
                 
                 # Method 3: Try extracting from scripts
                 if not price or price <= 0:
@@ -330,7 +626,7 @@ class AmazonPriceTracker(PriceTracker):
                     'available from these sellers',
                     'in stock soon',
                     'only left in stock',
-                    'only \d+ left in stock'
+                    r'only \d+ left in stock'  # Use raw string for correct escaping
                 ]
                 
                 out_of_stock_indicators = [

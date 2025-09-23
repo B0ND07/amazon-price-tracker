@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  amazon-price-tracker:
+    build: .
+    container_name: amazon-price-tracker
+    restart: unless-stopped
+    volumes:
+      # Mount persistent data directory
+      - ./data-persistent:/data
+      # Mount config file for easy configuration updates
+      - ./config.env:/usr/src/app/config.env:ro
+      # Mount tmpfs for temporary files to reduce disk I/O
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 512M
+    environment:
+      - DATA_DIR=/data
+      # Chrome stability environment variables
+      - CHROME_NO_SANDBOX=1
+      - CHROME_DISABLE_GPU=1
+      - CHROME_DISABLE_DEV_SHM_USAGE=1
+      # Python memory management
+      - MALLOC_ARENA_MAX=2
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+    networks:
+      - price-tracker-network
+    # Enhanced resource limits for Chrome stability
+    deploy:
+      resources:
+        limits:
+          memory: 1.5G  # Increased for Chrome driver pool
+          cpus: '1.5'
+        reservations:
+          memory: 512M  # Increased baseline
+          cpus: '0.5'
+    # Increased shared memory for Chrome stability
+    shm_size: '2gb'
+    # Enhanced healthcheck
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "python.*main.py"]
+      interval: 5m
+      timeout: 30s
+      retries: 3
+      start_period: 2m
+    # Logging configuration to prevent log buildup
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "3"
+
+networks:
+  price-tracker-network:
+    driver: bridge
+
+volumes:
+  # Named volume for data persistence (alternative to bind mount)
+  price-tracker-data:
+    driver: local
+
+

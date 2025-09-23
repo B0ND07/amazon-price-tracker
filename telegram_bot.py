@@ -23,131 +23,20 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Constants
-PRODUCTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'products.json')
+# Use persistent data directory if available (for Docker), otherwise use local data directory
+DATA_DIR = os.getenv('DATA_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data'))
+PRODUCTS_FILE = os.path.join(DATA_DIR, 'products.json')
 ADMIN_USER_ID = int(os.getenv('ADMIN_USER_ID', 0))
 
-from enum import Enum, auto
+# Product and StoreType classes are now imported from product_manager.py
 
-class StoreType(Enum):
-    AMAZON = 'amazon'
-    FLIPKART = 'flipkart'
+# ProductManager class moved to product_manager.py for unified management
 
-@dataclass
-class Product:
-    url: str
-    target_price: float
-    title: Optional[str] = None
-    current_price: Optional[float] = None
-    coupon: Optional[str] = None
-    id: Optional[str] = None
-    tag: Optional[str] = None
-    store_type: StoreType = StoreType.AMAZON  # Default to Amazon for backward compatibility
-
-class ProductManager:
-    def __init__(self, filename: str = PRODUCTS_FILE):
-        self.filename = filename
-        self.products: Dict[str, Product] = {}
-        self._load_products()
-    
-    def _product_to_dict(self, product: Product) -> dict:
-        """Convert a Product to a dictionary, handling enums properly."""
-        data = asdict(product)
-        # Convert StoreType enum to its value for JSON serialization
-        if 'store_type' in data and data['store_type'] is not None:
-            data['store_type'] = data['store_type'].value
-        return data
-    
-    def _dict_to_product(self, data: dict) -> Product:
-        """Convert a dictionary to a Product, handling enums properly."""
-        # Convert store_type string back to StoreType enum
-        if 'store_type' in data and isinstance(data['store_type'], str):
-            data['store_type'] = StoreType(data['store_type'])
-        return Product(**data)
-    
-    def _load_products(self):
-        if os.path.exists(self.filename):
-            try:
-                with open(self.filename, 'r') as f:
-                    data = json.load(f)
-                    self.products = {
-                        pid: self._dict_to_product(product_data)
-                        for pid, product_data in data.items()
-                    }
-            except json.JSONDecodeError as e:
-                logger.error(f"Error decoding products JSON: {e}")
-                # Try to recover by creating a backup of the corrupted file
-                try:
-                    import shutil
-                    backup_file = f"{self.filename}.bak.{int(time.time())}"
-                    shutil.copy2(self.filename, backup_file)
-                    logger.info(f"Created backup of corrupted file at {backup_file}")
-                except Exception as backup_error:
-                    logger.error(f"Failed to create backup: {backup_error}")
-                self.products = {}
-            except Exception as e:
-                logger.error(f"Error loading products: {e}")
-                self.products = {}
-    
-    def _save_products(self):
-        try:
-            # Create directory if it doesn't exist
-            os.makedirs(os.path.dirname(os.path.abspath(self.filename)), exist_ok=True)
-            
-            # Prepare data for JSON serialization
-            data_to_save = {
-                pid: self._product_to_dict(product)
-                for pid, product in self.products.items()
-            }
-            
-            # Write to a temporary file first
-            temp_file = f"{self.filename}.tmp"
-            with open(temp_file, 'w') as f:
-                json.dump(data_to_save, f, indent=2)
-            
-            # Atomic rename to ensure data integrity
-            if os.path.exists(self.filename):
-                os.replace(temp_file, self.filename)
-            else:
-                os.rename(temp_file, self.filename)
-                
-        except Exception as e:
-            logger.error(f"Error saving products: {e}")
-            # If there was an error, clean up the temp file if it exists
-            if os.path.exists(temp_file):
-                try:
-                    os.remove(temp_file)
-                except Exception as cleanup_error:
-                    logger.error(f"Failed to clean up temp file: {cleanup_error}")
-    
-    def add_product(self, url: str, target_price: float, tag: Optional[str] = None, store_type: StoreType = StoreType.AMAZON) -> Product:
-        import uuid
-        product_id = str(uuid.uuid4())
-        product = Product(
-            id=product_id,
-            url=url,
-            target_price=target_price,
-            tag=tag,
-            store_type=store_type
-        )
-        self.products[product_id] = product
-        self._save_products()
-        return product
-    
-    def remove_product(self, product_id: str) -> bool:
-        if product_id in self.products:
-            del self.products[product_id]
-            self._save_products()
-            return True
-        return False
-    
-    def get_all_products(self) -> List[Product]:
-        return list(self.products.values())
-    
-    def get_product(self, product_id: str) -> Optional[Product]:
-        return self.products.get(product_id)
+# Import unified product manager and classes
+from product_manager import get_product_manager, Product, StoreType
 
 # Initialize product manager
-product_manager = ProductManager()
+product_manager = get_product_manager()
 
 # Helper functions
 def update_global_email_alerts(enabled: bool) -> None:
@@ -317,12 +206,41 @@ def escape_html(text: str) -> str:
     """Escape HTML special characters."""
     if not text:
         return ""
-    return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    return str(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;').replace("'", '&#x27;')
+
+def validate_html_tags(html: str) -> bool:
+    """Validate that HTML tags are properly balanced."""
+    try:
+        # Count opening and closing tags
+        tag_pairs = [
+            ('<code>', '</code>'),
+            ('<b>', '</b>'),
+            ('<i>', '</i>'),
+            ('<a', '</a>')
+        ]
+        
+        for open_tag, close_tag in tag_pairs:
+            if open_tag == '<a':
+                # Special handling for <a> tags
+                open_count = html.count('<a ')
+                close_count = html.count('</a>')
+            else:
+                open_count = html.count(open_tag)
+                close_count = html.count(close_tag)
+                
+            if open_count != close_count:
+                logger.warning(f"HTML validation failed: {open_tag} count ({open_count}) != {close_tag} count ({close_count})")
+                return False
+        
+        return True
+    except Exception as e:
+        logger.error(f"Error validating HTML: {e}")
+        return False
 
 async def list_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List all tracked products."""
     # Reload products from file to ensure we have the latest data
-    product_manager._load_products()
+    product_manager.reload()
     products = product_manager.get_all_products()
     
     if not products:
@@ -333,45 +251,102 @@ async def list_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message_parts = ["<b>📋 Tracked Products</b>\n\n"]
         
         for product in products:
-            # Get product details and escape them
-            title = str(product.title or 'Not checked yet')
-            url = str(product.url)
+            try:
+                # Get product details and escape them safely
+                title = str(product.title or 'Not checked yet')
+                url = str(product.url)
+                
+                # Validate URL format
+                if not url.startswith(('http://', 'https://')):
+                    url = 'https://' + url
+                
+                # Always show current price if available
+                price_info = ""
+                if product.current_price is not None:
+                    price_emoji = "💰"
+                    if product.current_price <= product.target_price:
+                        price_emoji = "🎯"  # Target price met or better
+                    current_price_formatted = f"₹{float(product.current_price):,.2f}"
+                    price_info = f"{price_emoji} <b>Current Price:</b> <code>{escape_html(current_price_formatted)}</code>\n"
+                
+                # Show stock availability (only when out of stock)
+                stock_info = ""
+                if hasattr(product, 'in_stock') and product.in_stock is not None:
+                    if not product.in_stock:  # Only show when out of stock
+                        stock_info = "📦 <b>Stock:</b> <code>❌ Out of Stock</code>\n"
+                
+                # Show coupon information
+                coupon_info = ""
+                if hasattr(product, 'coupon_info') and product.coupon_info and isinstance(product.coupon_info, dict):
+                    coupon_data = product.coupon_info
+                    if coupon_data.get('available'):
+                        coupon_value = coupon_data.get('value', 0)
+                        coupon_desc = coupon_data.get('description', f'₹{coupon_value} coupon')
+                        # Ensure coupon description is properly formatted
+                        safe_coupon_desc = str(coupon_desc).strip() if coupon_desc else f'₹{coupon_value} coupon'
+                        coupon_info = f"🎫 <b>Coupon:</b> <code>{escape_html(safe_coupon_desc)}</code>\n"
+                        
+                        # Show final price if available
+                        if hasattr(product, 'final_price') and product.final_price is not None:
+                            final_price_formatted = f"₹{float(product.final_price):,.2f}"
+                            final_price_info = f"💵 <b>Final Price:</b> <code>{escape_html(final_price_formatted)}</code> <i>(after coupon)</i>\n"
+                            coupon_info += final_price_info
+                
+                # Format target price
+                formatted_price = f"₹{float(product.target_price):,.2f}"
+                
+                # Get tag if available
+                tag_info = f"🏷️ <b>Tag:</b> <code>{escape_html(str(product.tag))}</code>\n" if product.tag else ""
+                
+                # Build message with HTML formatting
+                message_parts.extend([
+                    f"🆔 <b>ID:</b> <code>{escape_html(str(product.id))}</code>\n",
+                    f"📦 <b>Title:</b> {escape_html(str(title))}\n" if title.strip() else "",
+                    f"🔗 <b>URL:</b> <a href='{url}'>{escape_html(url[:50])}{'...' if len(url) > 50 else ''}</a>\n",
+                    f"🎯 <b>Target Price:</b> <code>{escape_html(formatted_price)}</code>\n",
+                    tag_info,
+                    price_info,
+                    stock_info,
+                    coupon_info,
+                    "--------------------------------\n"
+                ])
             
-            # Always show current price if available
-            price_info = ""
-            if product.current_price is not None:
-                price_emoji = "💰"
-                if product.current_price <= product.target_price:
-                    price_emoji = "🎯"  # Target price met or better
-                price_info = f"{price_emoji} <b>Current Price:</b> <code>₹{float(product.current_price):,.2f}</code>\n"
-            
-            # Format target price
-            formatted_price = f"₹{float(product.target_price):,.2f}"
-            
-            # Get tag if available
-            tag_info = f"🏷️ <b>Tag:</b> <code>{escape_html(product.tag)}</code>\n" if product.tag else ""
-            
-            # Build message with HTML formatting
-            message_parts.extend([
-                f"🆔 <b>ID:</b> <code>{escape_html(str(product.id))}</code>\n",
-                f"📦 <b>Title:</b> {escape_html(title)}\n" if title.strip() else "",
-                f"🔗 <b>URL:</b> <a href='{escape_html(url)}'>{escape_html(url)}</a>\n",
-                f"🎯 <b>Target Price:</b> <code>{escape_html(formatted_price)}</code>\n",
-                tag_info,
-                price_info,
-                "--------------------------------\n"
-            ])
+            except Exception as e:
+                logger.error(f"Error processing product {getattr(product, 'id', 'unknown')}: {e}")
+                # Add a simple error entry for this product
+                message_parts.extend([
+                    f"🆔 <b>ID:</b> <code>{escape_html(str(getattr(product, 'id', 'unknown')))}</code>\n",
+                    f"❌ <b>Error:</b> Failed to display product details\n",
+                    "--------------------------------\n"
+                ])
         
         # Split message if too long (Telegram has a 4096 character limit)
         message = "".join(message_parts)
+        
+        # Validate HTML before sending
+        if not validate_html_tags(message):
+            logger.error("HTML validation failed, sending fallback message")
+            fallback_message = "<b>📋 Tracked Products</b>\n\nError displaying product list with formatting. Please check logs for details."
+            await update.message.reply_text(fallback_message, parse_mode='HTML')
+            return
+        
         if len(message) > 4000:
             chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
-            for chunk in chunks:
-                await update.message.reply_text(
-                    chunk,
-                    parse_mode='HTML',
-                    disable_web_page_preview=True
-                )
+            for i, chunk in enumerate(chunks):
+                # Validate each chunk
+                if not validate_html_tags(chunk):
+                    logger.error(f"HTML validation failed for chunk {i+1}, sending plain text")
+                    chunk_plain = chunk.replace('<b>', '').replace('</b>', '').replace('<code>', '').replace('</code>', '').replace('<i>', '').replace('</i>', '')
+                    # Remove <a> tags but keep the text
+                    import re
+                    chunk_plain = re.sub(r'<a[^>]*>([^<]*)</a>', r'\1', chunk_plain)
+                    await update.message.reply_text(chunk_plain, disable_web_page_preview=True)
+                else:
+                    await update.message.reply_text(
+                        chunk,
+                        parse_mode='HTML',
+                        disable_web_page_preview=True
+                    )
         else:
             await update.message.reply_text(
                 message,
@@ -398,8 +373,28 @@ async def remove_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         product_id = context.args[0]
-        product_manager.remove_product(product_id)
-        await update.message.reply_text(f"✅ Product {product_id} has been removed from tracking.")
+        success = product_manager.remove_product(product_id)
+        if success:
+            await update.message.reply_text(
+                f"✅ Product {product_id} has been removed from tracking.\n"
+                f"Restarting to apply changes... 🚀"
+            )
+            
+            # Trigger a restart to apply the removal immediately
+            logger.info("Triggering restart after removing product")
+            try:
+                import time
+                with open('.restart', 'w') as f:
+                    f.write(str(time.time()))
+                logger.info("Restart file created, waiting for process manager to restart")
+            except Exception as e:
+                logger.error(f"Failed to create restart file: {e}")
+                await update.message.reply_text("⚠️ Removed product but failed to trigger restart. Please restart manually.")
+            
+            # Stop the application to trigger the restart
+            context.application.stop_running()
+        else:
+            await update.message.reply_text(f"❌ Product {product_id} not found. Please check the ID and try again.")
     except Exception as e:
         logger.error(f"Error removing product: {e}")
         await update.message.reply_text("❌ Failed to remove the product. Please check the ID and try again.")

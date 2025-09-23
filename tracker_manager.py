@@ -10,7 +10,7 @@ import time
 from typing import Dict, Any, Optional, List, Tuple
 from dataclasses import asdict
 
-from telegram_bot import Product, StoreType
+from product_manager import Product, StoreType
 from trackers.amazon_tracker import AmazonPriceTracker
 from trackers.flipkart_tracker import FlipkartPriceTracker
 
@@ -39,11 +39,11 @@ class TrackerManager:
             StoreType.FLIPKART: FlipkartPriceTracker(email, password)
         }
     
-    def get_tracker(self, store_type: StoreType):
+    def get_tracker(self, store_type):
         """Get the appropriate tracker for the given store type.
         
         Args:
-            store_type: Store type (AMAZON or FLIPKART)
+            store_type: Store type (AMAZON or FLIPKART) - can be enum or string
             
         Returns:
             The appropriate price tracker instance
@@ -51,6 +51,13 @@ class TrackerManager:
         Raises:
             ValueError: If no tracker is available for the given store type
         """
+        # Handle both string and enum store_type values
+        if isinstance(store_type, str):
+            try:
+                store_type = StoreType(store_type)
+            except ValueError:
+                raise ValueError(f"Invalid store type string: {store_type}")
+        
         tracker = self.trackers.get(store_type)
         if not tracker:
             raise ValueError(f"No tracker available for store type: {store_type}")
@@ -88,7 +95,33 @@ class TrackerManager:
             return product_info
         except Exception as e:
             logger.error(f"Error getting product info for {product.url}: {e}")
-            raise
+            
+            # Return fallback information instead of raising exception
+            # This ensures the application continues running even with errors
+            if hasattr(product, 'title') and product.title:
+                # If we already have a product title in the database, use it for the fallback
+                fallback_info = {
+                    'title': product.title,
+                    'price': 0,  # We can't determine the price during an error
+                    'in_stock': False,  # Assume not in stock during error
+                    'url': product.url,
+                    'store': product.store_type.value.lower(),
+                    'last_updated': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                    'error': str(e)
+                }
+                
+                # Add bot detection info if applicable
+                if 'bot detection' in str(e).lower() or 'captcha' in str(e).lower():
+                    fallback_info['bot_detected'] = True
+                    fallback_info['title'] = f"{product.title} (Tracking Blocked)"
+                    logger.warning(f"Amazon bot detection for product: {product.title}")
+                
+                logger.info(f"Using fallback product information for {product.url}")
+                return fallback_info
+            else:
+                # If we don't have the product in the database yet, we need to raise
+                # so it doesn't get added with incomplete information
+                raise
     
     def check_price_drop(self, product: Product) -> Dict[str, Any]:
         """Check if the price has dropped for a product.

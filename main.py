@@ -17,7 +17,7 @@ from dataclasses import asdict
 from dotenv import load_dotenv
 
 # Local imports
-from telegram_bot import Product, StoreType
+from product_manager import get_product_manager, Product, StoreType
 from tracker_manager import TrackerManager
 
 # Load environment variables from .env file
@@ -68,208 +68,11 @@ def send_telegram_message(message: str) -> bool:
         logger.error(f"Failed to send Telegram message: {e}")
         return False
 
-PRODUCTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'products.json')
+# Use persistent data directory if available (for Docker), otherwise use local data directory
+DATA_DIR = os.getenv('DATA_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data'))
+PRODUCTS_FILE = os.path.join(DATA_DIR, 'products.json')
 
-class ProductManager:
-    """Manages product data storage and retrieval."""
-    def __init__(self, filename: str = PRODUCTS_FILE):
-        """Initialize the product manager.
-        
-        Args:
-            filename: Path to the products JSON file
-        """
-        self.filename = filename
-        self.products = {}
-        self._load_products()
-    
-    def _load_products(self):
-        """Load products from the JSON file."""
-        if os.path.exists(self.filename):
-            try:
-                with open(self.filename, 'r') as f:
-                    data = json.load(f)
-                    # Convert dict to Product objects
-                    for product_id, product_data in data.items():
-                        # Handle legacy products without store_type
-                        if 'store_type' not in product_data:
-                            product_data['store_type'] = StoreType.AMAZON
-                        else:
-                            product_data['store_type'] = StoreType(product_data['store_type'])
-                        self.products[product_id] = Product(**product_data)
-            except Exception as e:
-                logger.error(f"Error loading products: {e}")
-                self.products = {}
-        else:
-            # Load from environment variables if products.json doesn't exist
-            self._migrate_from_env()
-    
-    def _migrate_from_env(self):
-        """Migrate products from environment variables to JSON file."""
-        for i in range(1, 4):
-            url = os.getenv(f'PRODUCT_{i}_URL')
-            price = os.getenv(f'PRODUCT_{i}_TARGET_PRICE')
-            if url and price:
-                try:
-                    # Detect store type from URL
-                    store_type = TrackerManager.detect_store_type(url)
-                    if not store_type:
-                        logger.warning(f"Could not determine store type for URL: {url}")
-                        store_type = StoreType.AMAZON  # Default to Amazon for backward compatibility
-                    
-                    self.add_product(url, float(price), store_type=store_type)
-                except ValueError as e:
-                    logger.warning(f"Invalid price for product {i}: {e}")
-                except Exception as e:
-                    logger.error(f"Error migrating product {i}: {e}")
-    
-    def _save_products(self):
-        """Save products to the JSON file."""
-        def product_serializer(obj):
-            if hasattr(obj, 'to_dict'):
-                return obj.to_dict()
-            elif hasattr(obj, '__dict__'):
-                result = {}
-                for key, value in obj.__dict__.items():
-                    if key.startswith('_'):
-                        continue
-                    if hasattr(value, 'value'):  # Handle enums
-                        result[key] = value.value
-                    else:
-                        result[key] = value
-                return result
-            return str(obj)
-            
-        try:
-            # Create a copy of the products dictionary with serializable values
-            serializable_products = {}
-            for pid, product in self.products.items():
-                if hasattr(product, 'to_dict'):
-                    serializable_products[pid] = product.to_dict()
-                else:
-                    serializable_products[pid] = product_serializer(product)
-            
-            # Write to a temporary file first
-            temp_file = f"{self.filename}.tmp"
-            with open(temp_file, 'w') as f:
-                json.dump(serializable_products, f, indent=2, default=product_serializer)
-            
-            # Atomic replace
-            if os.path.exists(self.filename):
-                os.replace(temp_file, self.filename)
-            else:
-                os.rename(temp_file, self.filename)
-                
-        except Exception as e:
-            logger.error(f"Error saving products: {e}")
-            # Clean up temp file if it exists
-            if os.path.exists(temp_file):
-                try:
-                    os.remove(temp_file)
-                except:
-                    pass
-    
-    def add_product(self, url: str, target_price: float, **kwargs) -> Product:
-        """Add a new product to track.
-        
-        Args:
-            url: Product URL
-            target_price: Target price for alerts
-            **kwargs: Additional product attributes
-            
-        Returns:
-            Product: The created product
-            
-        Raises:
-            ValueError: If store type cannot be determined from URL
-        """
-        import uuid
-        from telegram_bot import Product, StoreType
-        
-        # Get store type from kwargs or detect from URL
-        store_type = kwargs.pop('store_type', None)
-        if not store_type:
-            store_type = TrackerManager.detect_store_type(url)
-            if not store_type:
-                raise ValueError("Could not determine store type from URL")
-        
-        product_id = str(uuid.uuid4())
-        product = Product(
-            id=product_id,
-            url=url,
-            target_price=target_price,
-            title=kwargs.get('title'),
-            current_price=kwargs.get('current_price'),
-            coupon=kwargs.get('coupon'),
-            tag=kwargs.get('tag'),
-            store_type=store_type
-        )
-        self.products[product_id] = product
-        self._save_products()
-        return product
-    
-    def remove_product(self, product_id: str) -> bool:
-        """Remove a product from tracking.
-        
-        Args:
-            product_id: ID of the product to remove
-            
-        Returns:
-            bool: True if product was removed, False if not found
-        """
-        if product_id in self.products:
-            del self.products[product_id]
-            self._save_products()
-            return True
-        return False
-    
-    def get_all_products(self) -> List[Product]:
-        """Get all tracked products.
-        
-        Returns:
-            List[Product]: List of all tracked products
-        """
-        return list(self.products.values())
-    
-    def get_product(self, product_id: str) -> Optional[Product]:
-        """Get a product by ID.
-        
-        Args:
-            product_id: ID of the product to get
-            
-        Returns:
-            Optional[Product]: The product if found, None otherwise
-        """
-        return self.products.get(product_id)
-    
-    def update_product(self, product_id: str, **kwargs) -> bool:
-        """Update product attributes.
-        
-        Args:
-            product_id: ID of the product to update
-            **kwargs: Attributes to update
-            
-        Returns:
-            bool: True if update was successful, False otherwise
-        """
-        if product_id in self.products:
-            product = self.products[product_id]
-            logger.info(f"Updating product {product_id} with data: {kwargs}")
-            
-            # Update product attributes
-            for key, value in kwargs.items():
-                if value is not None:  # Don't update with None values
-                    setattr(product, key, value)
-            
-            try:
-                self._save_products()
-                logger.info("Product updated successfully")
-                return True
-            except Exception as e:
-                logger.error(f"Error saving product updates: {e}")
-                return False
-        
-        logger.error(f"Product {product_id} not found")
-        return False
+# ProductManager class moved to product_manager.py for unified management
 
 class PriceTracker:
     """Main price tracker class that supports multiple store types."""
@@ -288,7 +91,7 @@ class PriceTracker:
         self.password = password
         self.smtp_address = smtp_address
         self.coupon_alert = coupon_alert
-        self.product_manager = ProductManager()
+        self.product_manager = get_product_manager()
         self.tracker_manager = TrackerManager(email, password)
         
         # Reload environment variables
@@ -383,9 +186,15 @@ class PriceTracker:
             if result.get('price_dropped', False):
                 self._send_price_drop_notification(product, result)
             
-            if result.get('coupon') and result.get('coupon') != getattr(product, 'coupon', None):
-                if not result.get('price_dropped'):  # Don't send duplicate notifications
-                    self._send_coupon_notification(product, result)
+            # Store coupon information (no notification needed)
+            if result.get('coupon'):
+                updates['coupon_info'] = result['coupon']  # Store full coupon details
+                if 'final_price' in result:
+                    updates['final_price'] = result['final_price']
+            
+            # Store stock availability
+            if 'in_stock' in result:
+                updates['in_stock'] = result['in_stock']
             
             return updates
             
@@ -424,12 +233,29 @@ class PriceTracker:
             else:
                 price_info = f"Price: ₹{current_price:,.2f}"
             
+            # Check for coupon information
+            coupon_info = ""
+            final_price_info = ""
+            
+            if result.get('coupon') and isinstance(result['coupon'], dict):
+                coupon_data = result['coupon']
+                if coupon_data.get('available'):
+                    coupon_value = coupon_data.get('value', 0)
+                    coupon_desc = coupon_data.get('description', f'₹{coupon_value} coupon')
+                    coupon_info = f"🎫 <b>Coupon Available:</b> {coupon_desc}\n"
+                    
+                    # Show final price if available
+                    if result.get('final_price') and result['final_price'] != current_price:
+                        final_price_info = f"💵 <b>Final Price (after coupon):</b> ₹{result['final_price']:,.2f}\n"
+            
             # Prepare message
             message = (
                 f"🎉 <b>Price Drop Alert!</b> 🎉\n\n"
                 f"📦 <b>{title}</b>\n"
                 f"🎯 <b>Target Price:</b> ₹{product.target_price:,.2f}\n"
                 f"💰 <b>New Price:</b> ₹{current_price:,.2f}\n"
+                f"{coupon_info}"
+                f"{final_price_info}"
                 f"🔗 <a href='{product.url}'>View Product</a>"
             )
 
@@ -520,6 +346,8 @@ class PriceTracker:
     def check_all_products(self):
         """Check all products and send alerts if necessary."""
         try:
+            # Reload products from file to ensure we have the latest data
+            self.product_manager.reload()
             products = self.product_manager.get_all_products()
             if not products:
                 logger.info("No products to track. Use /add to add a product.")
@@ -576,11 +404,19 @@ class PriceTracker:
                             )
                         # self.send_email_alert(vars(product) if hasattr(product, '__dict__') else product, updates)
                     
-                    # Random delay between 3-7 seconds to avoid being blocked
-                    time.sleep(random.uniform(3, 7))
+                    # Add delay between products (but not after the last one)
+                    if idx < len(product_list):
+                        delay = random.uniform(10, 15)
+                        logger.info(f"⏳ Waiting {delay:.1f} seconds before next product check...")
+                        time.sleep(delay)
                     
                 except Exception as e:
                     logger.error(f"Error checking product {idx}: {e}")
+                    # Still add delay even if there was an error, unless it's the last product
+                    if idx < len(product_list):
+                        delay = random.uniform(10, 15)
+                        logger.info(f"⏳ Error occurred, still waiting {delay:.1f} seconds before next product...")
+                        time.sleep(delay)
                     continue
 
             logger.info(f"✅ Completed checking {len(product_list)} products")
@@ -590,8 +426,35 @@ class PriceTracker:
             logger.error(f"Fatal error in check_all_products: {e}")
             raise
 
+def cleanup_chrome_processes():
+    """Clean up orphaned Chrome processes periodically"""
+    try:
+        import psutil
+        cleaned_count = 0
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
+            try:
+                if proc.info['name'] and 'chrome' in proc.info['name'].lower():
+                    # Kill very old Chrome processes (older than 2 hours)
+                    if proc.create_time() < time.time() - 7200:
+                        logger.info(f"Killing old Chrome process: {proc.pid}")
+                        proc.kill()
+                        cleaned_count += 1
+                    # Kill zombie processes
+                    elif proc.status() == psutil.STATUS_ZOMBIE:
+                        logger.info(f"Killing zombie Chrome process: {proc.pid}")
+                        proc.kill()
+                        cleaned_count += 1
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
+                continue
+        
+        if cleaned_count > 0:
+            logger.info(f"Cleaned up {cleaned_count} Chrome processes")
+            
+    except Exception as e:
+        logger.debug(f"Error during Chrome process cleanup: {e}")
+
 def run_tracker():
-    """Run the price tracker in a separate process."""
+    """Run the price tracker in a separate process with enhanced stability."""
     # Initialize tracker
     tracker = PriceTracker(
         email=os.getenv('SMTP_EMAIL'),
@@ -599,22 +462,82 @@ def run_tracker():
         coupon_alert=os.getenv('COUPON_ALERT', 'False').lower() == 'true'
     )
     
-    # Schedule the price check to run every 10 minutes
-    schedule.every(10).minutes.do(tracker.check_all_products)
+    # Schedule the price check to run every 10-20 minutes (randomized)
+    schedule.every(random.randint(10, 20)).minutes.do(tracker.check_all_products)
+    
+    # Schedule periodic Chrome process cleanup every hour
+    schedule.every().hour.do(cleanup_chrome_processes)
+    
+    # Schedule driver pool cleanup every 2 hours
+    def cleanup_driver_pools():
+        try:
+            from trackers.amazon_tracker import AmazonPriceTracker
+            from trackers.flipkart_tracker import FlipkartPriceTracker
+            AmazonPriceTracker.cleanup_all_drivers()
+            FlipkartPriceTracker.cleanup_all_drivers()
+            logger.info("Periodic driver pool cleanup completed")
+        except Exception as e:
+            logger.error(f"Error during driver pool cleanup: {e}")
+    
+    schedule.every(2).hours.do(cleanup_driver_pools)
+    
+    # Initial cleanup
+    cleanup_chrome_processes()
     
     # Initial run
     tracker.check_all_products()
     
-    # Keep the process running
+    # Keep the process running with health monitoring
+    last_health_check = time.time()
+    
     while True:
-        schedule.run_pending()
-        time.sleep(1)
+        try:
+            schedule.run_pending()
+            
+            # Health check every 30 minutes
+            current_time = time.time()
+            if current_time - last_health_check > 1800:  # 30 minutes
+                logger.info("Performing health check...")
+                
+                # Force garbage collection
+                import gc
+                gc.collect()
+                
+                # Log memory usage if psutil is available
+                try:
+                    import psutil
+                    process = psutil.Process()
+                    memory_mb = process.memory_info().rss / 1024 / 1024
+                    logger.info(f"Memory usage: {memory_mb:.1f} MB")
+                    
+                    # Restart if memory usage is too high (over 1GB)
+                    if memory_mb > 1024:
+                        logger.warning(f"High memory usage detected: {memory_mb:.1f} MB. Cleaning up...")
+                        cleanup_driver_pools()
+                        cleanup_chrome_processes()
+                        gc.collect()
+                        
+                except ImportError:
+                    pass
+                
+                last_health_check = current_time
+                
+            time.sleep(1)
+            
+        except KeyboardInterrupt:
+            logger.info("Tracker process interrupted, cleaning up...")
+            cleanup_driver_pools()
+            cleanup_chrome_processes()
+            break
+        except Exception as e:
+            logger.error(f"Error in tracker main loop: {e}")
+            time.sleep(5)  # Brief pause before continuing
 
 def run_telegram_bot():
     """Run the Telegram bot in a separate process."""
     from telegram_bot import main as telegram_main
     try:
-        asyncio.run(telegram_main())
+        telegram_main()  # telegram_main is not async, so no need for asyncio.run()
     except (SystemExit, KeyboardInterrupt):
         logger.info("Telegram bot process terminated")
     except Exception as e:

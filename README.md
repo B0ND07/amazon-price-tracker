@@ -1,18 +1,21 @@
 # 📦 Amazon India Price Tracker
 
-Track Amazon product prices and receive email alerts when:
+Track Amazon product prices and receive alerts when:
 - Price drops below your target 🎯
 - (Optional) Coupon discounts are available 🎫
+
+**Note: This tracker now supports Amazon only. Flipkart support has been disabled.**
 
 ---
 
 ## 🚀 Features
-- ✅ Track multiple products easily
-- ✅ Email alerts when price drops or coupons are available
+- ✅ Track multiple Amazon products easily
+- ✅ Email and Telegram alerts when price drops or coupons are available
 - ✅ Auto retries on network failures
-- ✅ Configurable through `.env` file
+- ✅ Configurable through `config.env` file
 - ✅ Random headers and delays to avoid getting blocked
 - ✅ Coupon checking can be turned ON/OFF
+- ✅ Lightweight Docker setup (no Chrome/Selenium needed)
 
 ---
 
@@ -34,7 +37,7 @@ pip install -r requirements.txt
 Or manually:
 
 ```bash
-pip install requests beautifulsoup4 lxml schedule python-dotenv
+pip install requests beautifulsoup4 lxml schedule python-dotenv python-telegram-bot psutil
 ```
 
 ### 3. Create a `.env` File
@@ -42,23 +45,18 @@ pip install requests beautifulsoup4 lxml schedule python-dotenv
 Create a `config.env` file in the root folder:
 
 ```env
-# Email Credentials
+# Email Configuration
 SMTP_EMAIL=your_email@example.com
 SMTP_PASSWORD=your_email_app_password
-
-# Products to Track
-PRODUCT_1_URL=https://amzn.in/d/ilw23qE
-PRODUCT_1_TARGET_PRICE=28000
-
-PRODUCT_2_URL=https://amzn.in/d/hSFfDhy
-PRODUCT_2_TARGET_PRICE=28000
-
-PRODUCT_3_URL=https://amzn.in/d/4nQrGkk
-PRODUCT_3_TARGET_PRICE=26000
-
-# Enable or Disable Coupon Checking
 COUPON_ALERT=True
+GLOBAL_EMAIL_ALERTS=True
+
+# Telegram Bot Configuration
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+ADMIN_USER_ID=your_telegram_user_id
 ```
+
+**Note: Products are now managed through the Telegram bot interface. No need to configure URLs in the config file.**
 
 ✅ *Tip: Use an **App Password** for Gmail accounts.*
 
@@ -78,18 +76,38 @@ python main.py
 
 ## Docker
 
+### Using Docker Compose (Recommended)
 ```bash
-docker build -t amazon . && docker run -v /root/amazon-price-tracker/data:/data amazon
+docker-compose up -d
 ```
+
+### Using Docker directly
+```bash
+docker build -t amazon-price-tracker .
+docker run -d --name amazon-tracker \
+  -v ./data-persistent:/data \
+  -v ./config.env:/usr/src/app/config.env:ro \
+  amazon-price-tracker
+```
+
+**Note: The Docker setup is now optimized for Amazon-only tracking (no Chrome/Selenium dependencies).**
 
 ## 🧹 Project Structure
 
 ```
 .
-├── amazon_price_tracker.py
-├── config.env
-├── README.md
-└── requirements.txt
+├── main.py                 # Main application entry point
+├── telegram_bot.py         # Telegram bot interface
+├── product_manager.py      # Product data management
+├── tracker_manager.py      # Price tracking coordination
+├── trackers/
+│   ├── amazon_tracker.py   # Amazon-specific price tracking
+│   └── base.py            # Base tracker class
+├── config.env             # Configuration file
+├── docker-compose.yml     # Docker Compose configuration
+├── Dockerfile            # Docker image definition
+├── requirements.txt      # Python dependencies
+└── README.md            # This file
 ```
 
 ---
@@ -104,9 +122,10 @@ docker build -t amazon . && docker run -v /root/amazon-price-tracker/data:/data 
 
 ## 🧠 Future Improvements
 
-- [ ] Add Telegram or WhatsApp alerts
+- [x] Add Telegram alerts ✅
 - [ ] Save price history to a local database
 - [ ] Create a simple web dashboard for monitoring
+- [ ] Add support for other e-commerce platforms
 
 ---
 

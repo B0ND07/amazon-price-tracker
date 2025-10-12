@@ -156,22 +156,22 @@ async def add_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not url.startswith(('http://', 'https://')):
             url = 'https://' + url
         
-        # Check if it's a valid Amazon or Flipkart URL
+        # Check if it's a valid Amazon URL (Flipkart disabled)
         import re
         amazon_pattern = r'(https?:\/\/)(www\.)?(amazon\.(com|in|co\.uk|de|fr|es|it|nl|pl|ae|sa|com\.br|com\.mx|com\.au|co\.jp|cn)|a\.co|amzn\.to|amzn\.in)'
-        flipkart_pattern = r'(https?:\/\/)(www\.)?(flipkart\.com|dl\.flipkart\.com)'
+        # flipkart_pattern = r'(https?:\/\/)(www\.)?(flipkart\.com|dl\.flipkart\.com)'  # Disabled
         
-        if not (re.match(amazon_pattern, url, re.IGNORECASE) or re.match(flipkart_pattern, url, re.IGNORECASE)):
+        if not re.match(amazon_pattern, url, re.IGNORECASE):
             await update.message.reply_text(
-                "❌ Please provide a valid Amazon or Flipkart product URL.\n"
-                "Example Amazon: `/add https://amzn.in/d/example 5000 SSD`\n"
-                "Example Flipkart: `/add https://www.flipkart.com/example 15000 Phone`",
+                "❌ Please provide a valid Amazon product URL.\n"
+                "Example: `/add https://amzn.in/d/example 5000 SSD`\n"
+                "Note: Flipkart support is currently disabled.",
                 parse_mode='Markdown'
             )
             return
             
-        # Set store type based on URL
-        store_type = StoreType.FLIPKART if 'flipkart.com' in url.lower() else StoreType.AMAZON
+        # Set store type to Amazon only (Flipkart disabled)
+        store_type = StoreType.AMAZON
 
         product = product_manager.add_product(url, target_price, tag, store_type=store_type)
         await update.message.reply_text(

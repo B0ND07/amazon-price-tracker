@@ -1,9 +1,9 @@
 {
   "006e2753-8c75-419a-b919-8b5d793f0a6c": {
-    "url": "https://www.amazon.in/dp/B093GGVB89",
+    "url": "https://amzn.in/d/iXj9L9L",
     "target_price": 600.0,
     "title": "Anker Type C to Type C 100W Flow Cable, 3ft Black, Powerline III Flow Cable, Super Fast Charging Cable (50% Charge in 30 mins), 25X More Durable, Data Sync Compatibility & Power Delivery (PD)",
-    "current_price": 699.0,
+    "current_price": 698.0,
     "coupon": null,
     "coupon_info": null,
     "final_price": null,
@@ -11,7 +11,7 @@
     "id": "006e2753-8c75-419a-b919-8b5d793f0a6c",
     "tag": null,
     "store_type": "amazon",
-    "last_updated": "2025-09-23T03:43:48.061611"
+    "last_updated": "2025-10-12T17:24:23.606767"
   },
   "5466440a-2572-46aa-8e09-10da7c6a9b31": {
     "url": "https://amzn.in/d/axSwOb3",
@@ -25,26 +25,7 @@
     "id": "5466440a-2572-46aa-8e09-10da7c6a9b31",
     "tag": null,
     "store_type": "amazon",
-    "last_updated": "2025-09-23T03:44:08.233874"
-  },
-  "67a2d3c4-cb8d-443d-9c07-87a6b38146e2": {
-    "url": "https://amzn.in/d/1ygAqOu",
-    "target_price": 500.0,
-    "title": "Hitachi 1.5 Ton Class 3 Star Xpandable+ Inverter Split AC (100% Copper, 4-Way Swing, ice Clean, Dust Filter, 3400SXL RAS.D318PCCIBS, White)",
-    "current_price": 32700.0,
-    "coupon": null,
-    "coupon_info": {
-      "available": true,
-      "value": 1500.0,
-      "description": "Apply ₹1500.0 coupon",
-      "type": "context_main_context_(#apex_desktop)"
-    },
-    "final_price": null,
-    "in_stock": true,
-    "id": "67a2d3c4-cb8d-443d-9c07-87a6b38146e2",
-    "tag": null,
-    "store_type": "amazon",
-    "last_updated": "2025-09-23T03:44:28.891119"
+    "last_updated": "2025-10-12T17:24:41.484642"
   },
   "6eff3504-33c9-4a38-b234-9a244c9e7f68": {
     "url": "https://amzn.in/d/dQ6KVct",
@@ -52,13 +33,19 @@
     "title": "WD-40 Multipurpose Spray, Rust Remover, Cleans Bike Chains, Hinge Lubricant, Loosens Jammed Parts, Degreaser, and Cleaning Agent, 420ml (344.4g)",
     "current_price": 329.0,
     "coupon": null,
-    "coupon_info": null,
+    "coupon_info": {
+      "available": true,
+      "value": 0.0,
+      "description": "2% off coupon",
+      "type": "percentage_main_context_(#apex_desktop)",
+      "percentage": 2
+    },
     "final_price": null,
     "in_stock": true,
     "id": "6eff3504-33c9-4a38-b234-9a244c9e7f68",
     "tag": null,
     "store_type": "amazon",
-    "last_updated": "2025-09-23T03:44:44.428771"
+    "last_updated": "2025-10-12T17:25:02.541745"
   },
   "d7483b1c-5e8a-4641-a8af-771c56f8164d": {
     "url": "https://amzn.in/d/5w3uUkN",
@@ -72,6 +59,6 @@
     "id": "d7483b1c-5e8a-4641-a8af-771c56f8164d",
     "tag": null,
     "store_type": "amazon",
-    "last_updated": null
+    "last_updated": "2025-10-12T17:25:20.980856"
   }
 }

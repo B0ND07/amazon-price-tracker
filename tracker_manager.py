@@ -1,7 +1,7 @@
 """Tracker Manager for handling multiple store-specific price trackers.
 
 This module provides the TrackerManager class which acts as a facade for
-interacting with different store-specific price trackers (Amazon, Flipkart, etc.).
+interacting with different store-specific price trackers (Amazon only - Flipkart disabled).
 """
 
 import logging
@@ -12,7 +12,7 @@ from dataclasses import asdict
 
 from product_manager import Product, StoreType
 from trackers.amazon_tracker import AmazonPriceTracker
-from trackers.flipkart_tracker import FlipkartPriceTracker
+# from trackers.flipkart_tracker import FlipkartPriceTracker  # Disabled
 
 logger = logging.getLogger(__name__)
 
@@ -35,15 +35,15 @@ class TrackerManager:
         
         # Initialize trackers for each supported store type
         self.trackers = {
-            StoreType.AMAZON: AmazonPriceTracker(email, password),
-            StoreType.FLIPKART: FlipkartPriceTracker(email, password)
+            StoreType.AMAZON: AmazonPriceTracker(email, password)
+            # StoreType.FLIPKART: FlipkartPriceTracker(email, password)  # Disabled
         }
     
     def get_tracker(self, store_type):
         """Get the appropriate tracker for the given store type.
         
         Args:
-            store_type: Store type (AMAZON or FLIPKART) - can be enum or string
+            store_type: Store type (AMAZON only - FLIPKART disabled) - can be enum or string
             
         Returns:
             The appropriate price tracker instance
@@ -234,8 +234,8 @@ class TrackerManager:
         Examples:
             >>> TrackerManager.detect_store_type("https://www.amazon.in/dp/B0ABC12345")
             <StoreType.AMAZON: 'amazon'>
-            >>> TrackerManager.detect_store_type("https://www.flipkart.com/p/xyz")
-            <StoreType.FLIPKART: 'flipkart'>
+            # >>> TrackerManager.detect_store_type("https://www.flipkart.com/p/xyz")  # Disabled
+            # <StoreType.FLIPKART: 'flipkart'>  # Disabled
             >>> TrackerManager.detect_store_type("https://example.com") is None
             True
         """
@@ -248,16 +248,16 @@ class TrackerManager:
         if 'amazon.' in url and any(x in url for x in ['/dp/', '/gp/', '/product/']):
             return StoreType.AMAZON
             
-        # Check for Flipkart URLs
-        if 'flipkart.com' in url and any(x in url for x in ['/p/', '/product/']):
-            return StoreType.FLIPKART
+        # Check for Flipkart URLs - DISABLED
+        # if 'flipkart.com' in url and any(x in url for x in ['/p/', '/product/']):
+        #     return StoreType.FLIPKART
             
         # Try to match common patterns that might be missing standard paths
         if 'amzn.' in url or '/amazon.' in url:
             return StoreType.AMAZON
             
-        if 'flipkart.' in url or '/fk/' in url:
-            return StoreType.FLIPKART
+        # if 'flipkart.' in url or '/fk/' in url:
+        #     return StoreType.FLIPKART
             
         logger.warning(f"Could not detect store type for URL: {url}")
         return None

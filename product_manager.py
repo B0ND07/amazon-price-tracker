@@ -180,7 +180,7 @@ class ProductManager:
             url: Product URL
             target_price: Target price for alerts
             tag: Optional tag for the product
-            store_type: Store type (AMAZON or FLIPKART)
+            store_type: Store type (AMAZON only - FLIPKART disabled)
             **kwargs: Additional product attributes
             
         Returns:

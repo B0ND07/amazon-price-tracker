@@ -472,9 +472,9 @@ def run_tracker():
     def cleanup_driver_pools():
         try:
             from trackers.amazon_tracker import AmazonPriceTracker
-            from trackers.flipkart_tracker import FlipkartPriceTracker
+            # from trackers.flipkart_tracker import FlipkartPriceTracker  # Disabled
             AmazonPriceTracker.cleanup_all_drivers()
-            FlipkartPriceTracker.cleanup_all_drivers()
+            # FlipkartPriceTracker.cleanup_all_drivers()  # Disabled
             logger.info("Periodic driver pool cleanup completed")
         except Exception as e:
             logger.error(f"Error during driver pool cleanup: {e}")

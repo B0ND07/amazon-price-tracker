@@ -17,27 +17,22 @@ services:
           size: 512M
     environment:
       - DATA_DIR=/data
-      # Chrome stability environment variables
-      - CHROME_NO_SANDBOX=1
-      - CHROME_DISABLE_GPU=1
-      - CHROME_DISABLE_DEV_SHM_USAGE=1
-      # Python memory management
+      # Python memory management (Chrome variables removed - Amazon uses requests only)
       - MALLOC_ARENA_MAX=2
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1
     networks:
       - price-tracker-network
-    # Enhanced resource limits for Chrome stability
+    # Optimized resource limits (Chrome removed - Amazon uses requests only)
     deploy:
       resources:
         limits:
-          memory: 1.5G  # Increased for Chrome driver pool
-          cpus: '1.5'
+          memory: 512M  # Reduced since no Chrome needed
+          cpus: '1.0'
         reservations:
-          memory: 512M  # Increased baseline
-          cpus: '0.5'
-    # Increased shared memory for Chrome stability
-    shm_size: '2gb'
+          memory: 256M  # Reduced baseline
+          cpus: '0.25'
+    # Note: shm_size removed since Chrome is not used
     # Enhanced healthcheck
     healthcheck:
       test: ["CMD", "pgrep", "-f", "python.*main.py"]

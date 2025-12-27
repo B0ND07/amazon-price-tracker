@@ -1,7 +1,7 @@
 """Tracker Manager for handling multiple store-specific price trackers.
 
 This module provides the TrackerManager class which acts as a facade for
-interacting with different store-specific price trackers (Amazon only - Flipkart disabled).
+interacting with different store-specific price trackers (Amazon, Flipkart, etc.).
 """
 
 import logging
@@ -10,9 +10,9 @@ import time
 from typing import Dict, Any, Optional, List, Tuple
 from dataclasses import asdict
 
-from product_manager import Product, StoreType
+from telegram_bot import Product, StoreType
 from trackers.amazon_tracker import AmazonPriceTracker
-# from trackers.flipkart_tracker import FlipkartPriceTracker  # Disabled
+from trackers.flipkart_tracker import FlipkartPriceTracker
 
 logger = logging.getLogger(__name__)
 
@@ -35,15 +35,15 @@ class TrackerManager:
         
         # Initialize trackers for each supported store type
         self.trackers = {
-            StoreType.AMAZON: AmazonPriceTracker(email, password)
-            # StoreType.FLIPKART: FlipkartPriceTracker(email, password)  # Disabled
+            StoreType.AMAZON: AmazonPriceTracker(email, password),
+            StoreType.FLIPKART: FlipkartPriceTracker(email, password)
         }
     
     def get_tracker(self, store_type):
         """Get the appropriate tracker for the given store type.
         
         Args:
-            store_type: Store type (AMAZON only - FLIPKART disabled) - can be enum or string
+            store_type: Store type (AMAZON or FLIPKART) - can be string or StoreType enum
             
         Returns:
             The appropriate price tracker instance
@@ -51,10 +51,10 @@ class TrackerManager:
         Raises:
             ValueError: If no tracker is available for the given store type
         """
-        # Handle both string and enum store_type values
+        # Convert string to StoreType enum if necessary
         if isinstance(store_type, str):
             try:
-                store_type = StoreType(store_type)
+                store_type = StoreType(store_type.lower())
             except ValueError:
                 raise ValueError(f"Invalid store type string: {store_type}")
         
@@ -109,13 +109,6 @@ class TrackerManager:
                     'last_updated': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
                     'error': str(e)
                 }
-                
-                # Add bot detection info if applicable
-                if 'bot detection' in str(e).lower() or 'captcha' in str(e).lower():
-                    fallback_info['bot_detected'] = True
-                    fallback_info['title'] = f"{product.title} (Tracking Blocked)"
-                    logger.warning(f"Amazon bot detection for product: {product.title}")
-                
                 logger.info(f"Using fallback product information for {product.url}")
                 return fallback_info
             else:
@@ -234,8 +227,8 @@ class TrackerManager:
         Examples:
             >>> TrackerManager.detect_store_type("https://www.amazon.in/dp/B0ABC12345")
             <StoreType.AMAZON: 'amazon'>
-            # >>> TrackerManager.detect_store_type("https://www.flipkart.com/p/xyz")  # Disabled
-            # <StoreType.FLIPKART: 'flipkart'>  # Disabled
+            >>> TrackerManager.detect_store_type("https://www.flipkart.com/p/xyz")
+            <StoreType.FLIPKART: 'flipkart'>
             >>> TrackerManager.detect_store_type("https://example.com") is None
             True
         """
@@ -248,16 +241,16 @@ class TrackerManager:
         if 'amazon.' in url and any(x in url for x in ['/dp/', '/gp/', '/product/']):
             return StoreType.AMAZON
             
-        # Check for Flipkart URLs - DISABLED
-        # if 'flipkart.com' in url and any(x in url for x in ['/p/', '/product/']):
-        #     return StoreType.FLIPKART
+        # Check for Flipkart URLs
+        if 'flipkart.com' in url and any(x in url for x in ['/p/', '/product/']):
+            return StoreType.FLIPKART
             
         # Try to match common patterns that might be missing standard paths
         if 'amzn.' in url or '/amazon.' in url:
             return StoreType.AMAZON
             
-        # if 'flipkart.' in url or '/fk/' in url:
-        #     return StoreType.FLIPKART
+        if 'flipkart.' in url or '/fk/' in url:
+            return StoreType.FLIPKART
             
         logger.warning(f"Could not detect store type for URL: {url}")
         return None

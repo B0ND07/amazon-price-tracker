@@ -80,8 +80,8 @@ def is_admin(user_id: int) -> bool:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a welcome message when the command /start is issued."""
     welcome_message = (
-        "🤖 *Amazon Price Tracker Bot*\n\n"
-        "I can help you track Amazon product prices and notify you when they drop below your target price.\n\n"
+        "🤖 *Amazon & Flipkart Price Tracker Bot*\n\n"
+        "I can help you track Amazon and Flipkart product prices and notify you when they drop below your target price.\n\n"
         "*Available commands:*\n"
         "`/add <url> <price> [tag]` - Add a product to track with an optional tag\n"
         "`/list` - List all tracked products\n"
@@ -91,6 +91,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "`/help` - Show this help message\n\n"
         "*Examples:*\n"
         "• `/add https://amzn.in/d/example 5000 SSD`\n"
+        "• `/add https://www.flipkart.com/product/p/itm123 5000 Phone`\n"
         "• `/add https://amzn.in/d/example 10000` (without tag)"
     )
     await update.message.reply_text(
@@ -102,13 +103,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /help is issued."""
     help_text = (
-        "🤖 <b>Amazon Price Tracker Bot</b>\n\n"
+        "🤖 <b>Amazon & Flipkart Price Tracker Bot</b>\n\n"
         "<b>Available commands:</b>\n"
         "• /start - Start the bot\n"
         "• /help - Show this help message\n"
         "• /restart - Restart the bot (Admin only)\n\n"
         "<b>Product Management:</b>\n"
-        "• /add [url] [target_price] [tag] - Add a product to track\n"
+        "• /add [url] [target_price] [tag] - Add Amazon or Flipkart products\n"
         "• /remove [product_id] - Remove a product from tracking\n"
         "• /list - List all tracked products\n\n"
         "<b>Email Alerts (Global):</b>\n"
@@ -118,7 +119,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(
         help_text,
-        parse_mode='Markdown',
+        parse_mode='HTML',
         disable_web_page_preview=True
     )
 
@@ -156,22 +157,33 @@ async def add_product(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not url.startswith(('http://', 'https://')):
             url = 'https://' + url
         
-        # Check if it's a valid Amazon URL (Flipkart disabled)
+        # Check if it's a valid Amazon or Flipkart URL
         import re
-        amazon_pattern = r'(https?:\/\/)(www\.)?(amazon\.(com|in|co\.uk|de|fr|es|it|nl|pl|ae|sa|com\.br|com\.mx|com\.au|co\.jp|cn)|a\.co|amzn\.to|amzn\.in)'
-        # flipkart_pattern = r'(https?:\/\/)(www\.)?(flipkart\.com|dl\.flipkart\.com)'  # Disabled
+        from tracker_manager import TrackerManager
         
-        if not re.match(amazon_pattern, url, re.IGNORECASE):
+        amazon_pattern = r'(https?:\/\/)(www\.)?(amazon\.(com|in|co\.uk|de|fr|es|it|nl|pl|ae|sa|com\.br|com\.mx|com\.au|co\.jp|cn)|a\.co|amzn\.to|amzn\.in)'
+        flipkart_pattern = r'(https?:\/\/)(www\.)?(flipkart\.com|dl\.flipkart\.com|flipkart\.in)'
+        
+        is_amazon = re.match(amazon_pattern, url, re.IGNORECASE)
+        is_flipkart = re.match(flipkart_pattern, url, re.IGNORECASE)
+        
+        if not (is_amazon or is_flipkart):
             await update.message.reply_text(
-                "❌ Please provide a valid Amazon product URL.\n"
+                "❌ Please provide a valid Amazon or Flipkart product URL.\n"
                 "Example: `/add https://amzn.in/d/example 5000 SSD`\n"
-                "Note: Flipkart support is currently disabled.",
+                "Or: `/add https://www.flipkart.com/product/p/itm123 5000 Phone`",
                 parse_mode='Markdown'
             )
             return
             
-        # Set store type to Amazon only (Flipkart disabled)
-        store_type = StoreType.AMAZON
+        # Detect store type automatically
+        store_type = TrackerManager.detect_store_type(url)
+        if not store_type:
+            await update.message.reply_text(
+                "❌ Could not detect store type from URL. Please use a valid product URL.",
+                parse_mode='Markdown'
+            )
+            return
 
         product = product_manager.add_product(url, target_price, tag, store_type=store_type)
         await update.message.reply_text(

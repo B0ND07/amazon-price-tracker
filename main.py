@@ -136,6 +136,8 @@ class PriceTracker:
         Returns:
             List[Product]: List of all tracked products
         """
+        # Ensure we read the latest data from disk before returning
+        self.product_manager.reload()
         return self.product_manager.get_all_products()
     
     def get_product(self, product_id: str) -> Optional[Product]:

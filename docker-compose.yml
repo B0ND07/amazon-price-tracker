@@ -17,22 +17,23 @@ services:
           size: 512M
     environment:
       - DATA_DIR=/data
-      # Python memory management (Chrome variables removed - Amazon uses requests only)
+      # Python and Chrome memory management
       - MALLOC_ARENA_MAX=2
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1
     networks:
       - price-tracker-network
-    # Optimized resource limits (Chrome removed - Amazon uses requests only)
+    # Optimized resource limits for Selenium (Amazon + Flipkart)
     deploy:
       resources:
         limits:
-          memory: 512M  # Reduced since no Chrome needed
+          memory: 800M  # Increased for Chrome/Selenium stability
           cpus: '1.0'
         reservations:
-          memory: 256M  # Reduced baseline
+          memory: 400M  # Baseline for stable operation
           cpus: '0.25'
-    # Note: shm_size removed since Chrome is not used
+    # Shared memory for Chrome (prevents crashes)
+    shm_size: '512m'
     # Enhanced healthcheck
     healthcheck:
       test: ["CMD", "pgrep", "-f", "python.*main.py"]
@@ -44,8 +45,8 @@ services:
     logging:
       driver: "json-file"
       options:
-        max-size: "100m"
-        max-file: "3"
+        max-size: "50m"  # Reduced for disk space conservation
+        max-file: "2"    # Keep only 2 log files
 
 networks:
   price-tracker-network:

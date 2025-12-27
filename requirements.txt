@@ -5,5 +5,5 @@ schedule
 python-telegram-bot==20.7
 python-dotenv
 psutil
-# selenium - removed (not needed for Amazon-only support)
-# webdriver-manager - removed (not needed for Amazon-only support)
+selenium
+webdriver-manager

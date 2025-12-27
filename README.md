@@ -6,6 +6,20 @@ Track Amazon product prices and receive alerts when:
 
 **Note: This tracker now supports Amazon only. Flipkart support has been disabled.**
 
+cd /root/amazon-price-tracker
+
+# View logs
+./tracker.sh logs
+# or: tail -f price_tracker.log
+
+# Check status
+./tracker.sh status
+
+# Stop
+./tracker.sh stop
+
+# Restart
+./tracker.sh restart
 ---
 
 ## 🚀 Features
